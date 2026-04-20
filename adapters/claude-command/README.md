@@ -21,6 +21,9 @@ ln -sfn "$(pwd)/adapters/claude-command/mp" ~/.claude/commands/mp
 Then in Claude Code:
 
 ```text
+/mp 금리가 내려간 게 진짜 완화 기대 때문임?
+/mp ask 대형 IPO 때문에 성장주가 강한 걸까?
+/mp research 금리 하락이 성장주에 좋은 신호임?
 /mp now
 /mp think 금리가 부담인데도 반도체가 버티는 것 같다
 /mp review

@@ -4,12 +4,40 @@ The MVP is intentionally small and implemented as a Rust CLI.
 
 ## Commands
 
+### `mp "question"`
+
+Acceptance criteria:
+
+- Treats bare non-command arguments as a market inquiry.
+- Generates a structured response with question breakdown, possible explanations, evidence checks, counter-view, next better question, and safety boundary.
+- Saves an `inquiry` journal event unless `--no-save` is passed.
+- Avoids trading advice, buy/sell recommendations, price targets, stop-loss, and portfolio instructions.
+
+### `mp ask "question"`
+
+Acceptance criteria:
+
+- Runs the same inquiry flow as bare `mp "question"`.
+- Supports `--no-save`.
+
+### `mp research "question"` / `mp "question" --research`
+
+Acceptance criteria:
+
+- Routes both the explicit subcommand and `--research` flag to research-backed inquiry mode.
+- Uses a `ResearchProvider`-style boundary with deterministic fixture/noop behavior in Phase 1.
+- Renders source metadata when available.
+- Renders a clear no-provider/no-source fallback when no live provider is configured.
+- Distinguishes source-backed material from inference scaffolding.
+- Saves a `research_inquiry` journal event with provider/source metadata unless `--no-save` is passed.
+- Avoids trading advice, buy/sell recommendations, price targets, stop-loss, and portfolio instructions.
+
 ### `mp now`
 
 Acceptance criteria:
 
 - Prints a compact market card.
-- Includes mood, assets, drivers, tensions, question, and concept.
+- Includes mood, assets, drivers, tensions, question seeds / market puzzle prompts, and concept.
 - Saves a `pulse` journal event unless `--no-save` is passed.
 - Does not block the loop if live quote fetch fails.
 
@@ -18,7 +46,7 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Records the user's text as a `thought` event.
-- Generates structured feedback with claim, good, check, counter-view, next questions, and concepts.
+- Generates structured feedback with claim, thesis type, good, check, counter-view, next questions, and concepts.
 - Saves both thought and feedback unless `--no-save` is passed.
 - Avoids trading advice.
 
@@ -27,7 +55,7 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Reads recent JSONL journal events.
-- Surfaces repeated themes and concepts.
+- Surfaces repeated themes, concepts, inquiry counts, and question/thesis habits.
 - Suggests one reasoning drill.
 
 ## Install target
@@ -43,5 +71,8 @@ Acceptance criteria:
 - charts
 - portfolio support
 - backtesting
+- live RSS/SEC/news network providers
+- Brave/Tavily/NewsAPI/SerpApi/Alpha Vantage/FRED integrations
+- article body storage or summarization
 - external plugin loading
 - paid data vendors

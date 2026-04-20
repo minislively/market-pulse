@@ -29,16 +29,94 @@ struct Pulse {
 }
 
 #[derive(Clone, Debug)]
+struct Inquiry {
+    timestamp: String,
+    question: String,
+    linked: Option<String>,
+    thesis_type: String,
+    breakdown: Vec<String>,
+    explanations: Vec<String>,
+    evidence: Vec<String>,
+    counter: Vec<String>,
+    next_question: String,
+    concepts: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ResearchQuery {
+    question: String,
+    linked: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ResearchSource {
+    title: String,
+    publisher: String,
+    url: String,
+    published_at: Option<String>,
+    relevance: String,
+    evidence: String,
+}
+
+#[derive(Clone, Debug)]
+struct ResearchBundle {
+    provider: String,
+    sources: Vec<ResearchSource>,
+    notes: Vec<String>,
+}
+
+trait ResearchProvider {
+    fn name(&self) -> &'static str;
+    fn research(&self, query: &ResearchQuery) -> Result<ResearchBundle, String>;
+}
+
+struct NoopResearchProvider;
+
+impl ResearchProvider for NoopResearchProvider {
+    fn name(&self) -> &'static str {
+        "noop"
+    }
+
+    fn research(&self, query: &ResearchQuery) -> Result<ResearchBundle, String> {
+        let linked_note = query
+            .linked
+            .as_ref()
+            .map(|ts| format!("linked to latest pulse {ts}"))
+            .unwrap_or_else(|| "no prior pulse linked".into());
+        Ok(ResearchBundle {
+            provider: self.name().into(),
+            sources: Vec::new(),
+            notes: vec![
+                "Phase 1 research mode is deterministic: no live RSS/API provider is configured yet."
+                    .into(),
+                format!("{linked_note}; question scaffold is inference-only until a provider is added."),
+            ],
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 struct Feedback {
     timestamp: String,
     thought: String,
     linked: Option<String>,
     claim: String,
+    thesis_type: String,
     good: Vec<String>,
     check: Vec<String>,
     counter: Vec<String>,
     next: Vec<String>,
     concepts: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CommandKind {
+    Now,
+    Think,
+    Review,
+    Help,
+    Inquiry { text: String, no_save: bool },
+    Research { text: String, no_save: bool },
 }
 
 const SYMBOLS: &[(&str, &str, &str)] = &[
@@ -61,16 +139,70 @@ pub fn main_entry() {
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
-    match args.first().map(String::as_str) {
-        None | Some("now") => now(&args),
-        Some("think") => think(&args),
-        Some("review") => review(&args),
-        Some("help") | Some("--help") | Some("-h") => {
-            println!("Usage:\n  mp now [--compact] [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N]");
+    match parse_command(&args)? {
+        CommandKind::Now => now(&args),
+        CommandKind::Think => think(&args),
+        CommandKind::Review => review(&args),
+        CommandKind::Help => {
+            print_help();
             Ok(())
         }
-        Some(cmd) => Err(format!("unknown command '{cmd}'")),
+        CommandKind::Inquiry { text, no_save } => inquiry(&text, no_save),
+        CommandKind::Research { text, no_save } => research_inquiry(&text, no_save),
     }
+}
+
+fn parse_command(args: &[String]) -> Result<CommandKind, String> {
+    match args.first().map(String::as_str) {
+        None => Ok(CommandKind::Now),
+        Some("now") => Ok(CommandKind::Now),
+        Some("think") => Ok(CommandKind::Think),
+        Some("review") => Ok(CommandKind::Review),
+        Some("help") | Some("--help") | Some("-h") => Ok(CommandKind::Help),
+        Some("ask") => inquiry_command(&args[1..], "`mp ask` needs a question"),
+        Some("research") => research_command(&args[1..], "`mp research` needs a question"),
+        Some(first) if first.starts_with('-') => Err(format!("unknown option '{first}'")),
+        Some(_) => inquiry_command(args, "`mp` needs a market question"),
+    }
+}
+
+fn inquiry_command(args: &[String], empty_error: &str) -> Result<CommandKind, String> {
+    let (text, no_save, research) = collect_question_args(args);
+    if text.is_empty() {
+        return Err(empty_error.into());
+    }
+    if research {
+        Ok(CommandKind::Research { text, no_save })
+    } else {
+        Ok(CommandKind::Inquiry { text, no_save })
+    }
+}
+
+fn research_command(args: &[String], empty_error: &str) -> Result<CommandKind, String> {
+    let (text, no_save, _) = collect_question_args(args);
+    if text.is_empty() {
+        return Err(empty_error.into());
+    }
+    Ok(CommandKind::Research { text, no_save })
+}
+
+fn collect_question_args(args: &[String]) -> (String, bool, bool) {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let research = args.iter().any(|a| a == "--research");
+    let text = args
+        .iter()
+        .filter(|a| !matches!(a.as_str(), "--no-save" | "--research"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let text = text.trim().to_string();
+    (text, no_save, research)
+}
+
+fn print_help() {
+    println!(
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N]"
+    );
 }
 
 fn now(args: &[String]) -> Result<(), String> {
@@ -104,6 +236,45 @@ fn think(args: &[String]) -> Result<(), String> {
     }
     println!("{}", render_feedback(&feedback));
     Ok(())
+}
+
+fn inquiry(question: &str, no_save: bool) -> Result<(), String> {
+    let linked = latest_pulse_timestamp();
+    let inquiry = make_inquiry(question.trim(), linked);
+    if !no_save {
+        append_event(&inquiry_json(&inquiry))?;
+    }
+    println!("{}", render_inquiry(&inquiry));
+    Ok(())
+}
+
+fn research_inquiry(question: &str, no_save: bool) -> Result<(), String> {
+    let linked = latest_pulse_timestamp();
+    let query = ResearchQuery {
+        question: question.trim().to_string(),
+        linked: linked.clone(),
+    };
+    let provider = NoopResearchProvider;
+    let bundle = research_bundle_from_provider(&provider, &query);
+    let inquiry = make_inquiry(&query.question, linked);
+    if !no_save {
+        append_event(&research_inquiry_json(&inquiry, &bundle))?;
+    }
+    println!("{}", render_research_inquiry(&inquiry, &bundle));
+    Ok(())
+}
+
+fn research_bundle_from_provider(
+    provider: &dyn ResearchProvider,
+    query: &ResearchQuery,
+) -> ResearchBundle {
+    provider
+        .research(query)
+        .unwrap_or_else(|err| ResearchBundle {
+            provider: provider.name().into(),
+            sources: Vec::new(),
+            notes: vec![format!("research provider failed gracefully: {err}")],
+        })
 }
 
 fn review(args: &[String]) -> Result<(), String> {
@@ -396,6 +567,31 @@ fn detect_tags(text: &str) -> Vec<&'static str> {
         ("oil", &["유가", "oil", "wti", "원유"]),
         ("korea", &["한국", "코스피", "kospi", "korea"]),
         ("crypto", &["코인", "비트", "btc", "crypto"]),
+        (
+            "event",
+            &[
+                "ipo",
+                "상장",
+                "공모",
+                "listing",
+                "earnings",
+                "실적",
+                "이벤트",
+            ],
+        ),
+        (
+            "positioning",
+            &[
+                "포지션",
+                "수급",
+                "positioning",
+                "숏커버",
+                "short",
+                "리밸런싱",
+                "옵션",
+                "만기",
+            ],
+        ),
     ];
     for (tag, needles) in defs {
         if needles.iter().any(|n| lower.contains(&n.to_lowercase())) {
@@ -403,11 +599,122 @@ fn detect_tags(text: &str) -> Vec<&'static str> {
         }
     }
     tags.sort_unstable();
+    tags.dedup();
     tags
+}
+
+fn detect_thesis_type(tags: &[&str]) -> String {
+    if tags.contains(&"rates") && tags.contains(&"semis") {
+        "rates/growth tension thesis"
+    } else if tags.contains(&"event") {
+        "event-driven / supply-calendar thesis"
+    } else if tags.contains(&"positioning") {
+        "positioning / flow thesis"
+    } else if tags.contains(&"rates") {
+        "rates / policy-expectation thesis"
+    } else if tags.contains(&"fx") {
+        "dollar-liquidity transmission thesis"
+    } else if tags.contains(&"oil") {
+        "oil / inflation impulse thesis"
+    } else if tags.contains(&"semis") {
+        "sector leadership thesis"
+    } else if tags.contains(&"korea") {
+        "Korea/EM risk-transmission thesis"
+    } else if tags.contains(&"crypto") {
+        "high-beta risk appetite thesis"
+    } else {
+        "broad market narrative thesis"
+    }
+    .into()
+}
+
+fn make_inquiry(question: &str, linked: Option<String>) -> Inquiry {
+    let tags = detect_tags(question);
+    let thesis_type = detect_thesis_type(&tags);
+    Inquiry {
+        timestamp: timestamp(),
+        question: question.to_string(),
+        linked,
+        breakdown: question_breakdown(question, &tags, &thesis_type),
+        explanations: possible_explanations(&tags),
+        evidence: evidence_checks(&tags),
+        counter: counters(&tags),
+        next_question: next_better_question(&tags),
+        concepts: concepts(&tags),
+        thesis_type,
+    }
+}
+
+fn question_breakdown(question: &str, tags: &[&str], thesis_type: &str) -> Vec<String> {
+    let mut v = vec![
+        format!(
+            "Core question: “{}”",
+            question.split_whitespace().collect::<Vec<_>>().join(" ")
+        ),
+        format!("Main lens: {thesis_type}."),
+    ];
+    if tags.is_empty() {
+        v.push("No strong topic tag was detected, so start by separating price action, timing, and causality.".into());
+    } else {
+        v.push(format!("Detected market grammar: {}.", tags.join(", ")));
+    }
+    v.push(
+        "Do not decide from one headline; ask what would confirm and what would falsify the story."
+            .into(),
+    );
+    v
+}
+
+fn possible_explanations(tags: &[&str]) -> Vec<String> {
+    let mut v = Vec::new();
+    if tags.contains(&"rates") {
+        v.push("Rate-cut or policy-easing expectations could be changing discount-rate pressure on growth assets.".into());
+    }
+    if tags.contains(&"event") {
+        v.push("A large IPO/listing or earnings event can shift attention, supply, and positioning, but it rarely explains the whole market alone.".into());
+    }
+    if tags.contains(&"positioning") {
+        v.push("Positioning, short-covering, option hedging, or rebalancing may create a move that looks like a macro signal.".into());
+    }
+    if tags.contains(&"semis") {
+        v.push("Semiconductor or AI leadership may be a sector-specific growth story rather than broad risk appetite.".into());
+    }
+    if tags.contains(&"fx") {
+        v.push(
+            "Dollar strength or KRW weakness can transmit liquidity pressure into Korea/EM assets."
+                .into(),
+        );
+    }
+    if tags.contains(&"oil") {
+        v.push(
+            "Oil can matter through inflation expectations, margins, and sector rotation.".into(),
+        );
+    }
+    if tags.contains(&"crypto") {
+        v.push("Crypto strength can be a high-beta liquidity signal, but it may also be its own positioning cycle.".into());
+    }
+    v.push("Earnings revisions, liquidity, or positioning may be dominating even when the headline story sounds macro-driven.".into());
+    v.push("The move may simply be noise unless multiple assets confirm the same story in the right sequence.".into());
+    v.truncate(4);
+    v
+}
+
+fn evidence_checks(tags: &[&str]) -> Vec<String> {
+    let mut v = checks(tags);
+    if tags.contains(&"event") {
+        v.push("Check whether the IPO/listing/event timing actually came before the market move, not after the narrative formed.".into());
+        v.push("Check whether the effect is broad index-level pressure or concentrated around related names and liquidity pockets.".into());
+    }
+    if tags.contains(&"positioning") {
+        v.push("Look for signs of flow/positioning pressure: gap moves, squeeze-like reversals, option expiry, or narrow leadership.".into());
+    }
+    v.push("State the one observation that would make this explanation wrong.".into());
+    v
 }
 
 fn make_feedback(text: &str, linked: Option<String>) -> Feedback {
     let tags = detect_tags(text);
+    let thesis_type = detect_thesis_type(&tags);
     let clean = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let claim = if tags.is_empty() {
         format!("You are making a market interpretation that needs evidence: “{clean}”")
@@ -422,8 +729,9 @@ fn make_feedback(text: &str, linked: Option<String>) -> Feedback {
         thought: text.to_string(),
         linked,
         claim,
+        thesis_type,
         good: good(&tags),
-        check: checks(&tags),
+        check: evidence_checks(&tags),
         counter: counters(&tags),
         next: next_questions(&tags),
         concepts: concepts(&tags),
@@ -441,6 +749,9 @@ fn good(tags: &[&str]) -> Vec<String> {
     }
     if tags.len() >= 2 {
         v.push("You are already comparing more than one driver instead of forcing a single-cause story.".into());
+    }
+    if tags.contains(&"event") {
+        v.push("You noticed an event-driven explanation instead of accepting the first macro narrative.".into());
     }
     v
 }
@@ -467,6 +778,9 @@ fn checks(tags: &[&str]) -> Vec<String> {
                 .into(),
         );
     }
+    if tags.contains(&"positioning") {
+        v.push("Check whether the move looks like flow/positioning pressure rather than a durable fundamental change.".into());
+    }
     if v.len() == 1 {
         v.push(
             "Avoid broad claims until at least two assets or events point in the same direction."
@@ -487,6 +801,12 @@ fn counters(tags: &[&str]) -> Vec<String> {
     if tags.contains(&"fx") {
         v.push("FX pressure can matter less when local sector leadership or global risk appetite is strong enough.".into());
     }
+    if tags.contains(&"event") {
+        v.push("An IPO/listing or earnings calendar can explain local supply/attention, but not necessarily the whole index or macro regime.".into());
+    }
+    if tags.contains(&"positioning") {
+        v.push("A positioning-driven move can fade quickly once the flow is absorbed, even if the headline narrative sounds persuasive.".into());
+    }
     if v.is_empty() {
         v.push("The same price action may come from positioning, liquidity, news timing, or sector rotation; keep at least one alternative open.".into());
     }
@@ -497,6 +817,8 @@ fn next_questions(tags: &[&str]) -> Vec<String> {
     let mut v = Vec::new();
     if tags.contains(&"rates") && tags.contains(&"semis") {
         v.push("If yields rise further, do semis still outperform the broad market?".into());
+    } else if tags.contains(&"rates") {
+        v.push("If this is really easing expectations, should growth assets, the dollar, and yields confirm together?".into());
     }
     if tags.contains(&"fx") && tags.contains(&"korea") {
         v.push("Does KRW weakness coincide with foreign selling, or are exporters offsetting the pressure?".into());
@@ -504,12 +826,24 @@ fn next_questions(tags: &[&str]) -> Vec<String> {
     if tags.contains(&"oil") {
         v.push("Is oil moving enough to change inflation expectations, or is it only a sector input today?".into());
     }
+    if tags.contains(&"event") {
+        v.push("What market segment should move first if the IPO/event explanation is actually driving the session?".into());
+    }
+    if tags.contains(&"positioning") {
+        v.push("What would distinguish positioning from a real change in growth, rates, or earnings expectations?".into());
+    }
     if v.is_empty() {
         v.push(
             "What would you need to see by the close to say this interpretation was wrong?".into(),
         );
     }
     v
+}
+
+fn next_better_question(tags: &[&str]) -> String {
+    next_questions(tags).into_iter().next().unwrap_or_else(|| {
+        "What evidence would make this market interpretation wrong by the close?".into()
+    })
 }
 
 fn concepts(tags: &[&str]) -> Vec<String> {
@@ -523,6 +857,8 @@ fn concepts(tags: &[&str]) -> Vec<String> {
                 "oil" => "inflation impulse",
                 "korea" => "EM/Korea risk transmission",
                 "crypto" => "high-beta risk appetite",
+                "event" => "event-driven supply/attention",
+                "positioning" => "positioning and flow",
                 _ => continue,
             }
             .to_string(),
@@ -535,9 +871,10 @@ fn concepts(tags: &[&str]) -> Vec<String> {
 }
 
 fn render_pulse(p: &Pulse, compact: bool) -> String {
+    let seeds = question_seeds_for(p);
     if compact {
         return format!(
-            "[mp] {} · {} · Q: {}",
+            "[mp] {} · {} · Puzzle: {}",
             p.mood,
             p.drivers
                 .iter()
@@ -545,7 +882,7 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("; "),
-            p.question
+            seeds.first().unwrap_or(&p.question)
         );
     }
     let mut out = format!(
@@ -592,6 +929,10 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
         "\nQuestion\n  {}\n\nConcept\n  {}\n",
         p.question, p.concept
     ));
+    out.push_str("\nMarket puzzle / question seeds\n");
+    for seed in seeds {
+        out.push_str(&format!("  - {seed}\n"));
+    }
     if !p.notes.is_empty() {
         out.push_str("\nSource notes\n");
         for n in &p.notes {
@@ -601,10 +942,144 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
     out
 }
 
+fn question_seeds_for(p: &Pulse) -> Vec<String> {
+    let text = format!(
+        "{} {} {}",
+        p.mood,
+        p.tensions.join(" "),
+        p.drivers.join(" ")
+    )
+    .to_lowercase();
+    let mut seeds = vec![p.question.clone()];
+    if text.contains("rates") || text.contains("yield") {
+        seeds.push(
+            "If yields move again, does growth leadership strengthen, fade, or ignore it?".into(),
+        );
+    }
+    if text.contains("usd") || text.contains("dollar") || text.contains("fx") {
+        seeds.push(
+            "Is dollar/FX pressure leading risk appetite, or only confirming a local move?".into(),
+        );
+    }
+    if text.contains("oil") || text.contains("inflation") {
+        seeds.push(
+            "Is oil large enough to change inflation expectations, or just sector noise?".into(),
+        );
+    }
+    if text.contains("mixed") {
+        seeds.push("Which asset is disagreeing with the headline story, and why?".into());
+    }
+    let mut unique = Vec::new();
+    for seed in seeds {
+        if !unique.contains(&seed) {
+            unique.push(seed);
+        }
+    }
+    unique.truncate(3);
+    unique
+}
+
+fn render_inquiry(i: &Inquiry) -> String {
+    let mut out = format!("Market Inquiry · {}\n\nQuestion breakdown\n", i.timestamp);
+    for x in &i.breakdown {
+        out.push_str(&format!("  - {x}\n"));
+    }
+    out.push_str("\nPossible explanations\n");
+    for (idx, x) in i.explanations.iter().enumerate() {
+        out.push_str(&format!("  {}. {}\n", idx + 1, x));
+    }
+    out.push_str("\nEvidence to check\n");
+    for x in &i.evidence {
+        out.push_str(&format!("  - {x}\n"));
+    }
+    out.push_str("\nCounter-view\n");
+    for x in &i.counter {
+        out.push_str(&format!("  - {x}\n"));
+    }
+    out.push_str(&format!(
+        "\nNext better question\n  {}\n\nConcepts\n  {}\n\nBoundary\n  Market literacy only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions.",
+        i.next_question,
+        i.concepts.join(", ")
+    ));
+    out
+}
+
+fn render_research_inquiry(i: &Inquiry, bundle: &ResearchBundle) -> String {
+    let mut out = format!(
+        "Research-backed Inquiry · {} · provider: {}\n\nQuestion breakdown\n",
+        i.timestamp, bundle.provider
+    );
+    for x in &i.breakdown {
+        out.push_str(&format!("  - {x}\n"));
+    }
+    out.push_str("\nSources checked\n");
+    if bundle.sources.is_empty() {
+        out.push_str("  - No configured live research provider returned sources in Phase 1.\n");
+        out.push_str(
+            "  - Treat the analysis below as inference scaffolding, not source-backed fact.\n",
+        );
+    } else {
+        for (idx, source) in bundle.sources.iter().enumerate() {
+            let published = source
+                .published_at
+                .as_deref()
+                .unwrap_or("published time unavailable");
+            out.push_str(&format!(
+                "  {}. {} — {} — {}\n",
+                idx + 1,
+                source.title,
+                source.publisher,
+                published
+            ));
+            out.push_str(&format!("     URL: {}\n", source.url));
+            out.push_str(&format!("     Relevance: {}\n", source.relevance));
+            out.push_str(&format!("     Evidence: {}\n", source.evidence));
+        }
+    }
+    if !bundle.notes.is_empty() {
+        out.push_str("\nResearch notes\n");
+        for note in &bundle.notes {
+            out.push_str(&format!("  - {note}\n"));
+        }
+    }
+    out.push_str("\nWhat the sources suggest\n");
+    if bundle.sources.is_empty() {
+        out.push_str("  - No source-backed claim yet; use the inquiry lens below to decide what evidence to fetch next.\n");
+    } else {
+        for source in &bundle.sources {
+            out.push_str(&format!("  - Source-backed: {}\n", source.evidence));
+        }
+    }
+    out.push_str("\nEvidence for your thesis\n");
+    if bundle.sources.is_empty() {
+        out.push_str(
+            "  - Not source-backed yet: first connect the question to observable market data.\n",
+        );
+    } else {
+        for source in bundle.sources.iter().take(3) {
+            out.push_str(&format!("  - {}: {}\n", source.publisher, source.evidence));
+        }
+    }
+    out.push_str("\nEvidence against / counter-view\n");
+    for x in &i.counter {
+        out.push_str(&format!("  - {x}\n"));
+    }
+    out.push_str("\nData to check next\n");
+    for x in &i.evidence {
+        out.push_str(&format!("  - {x}\n"));
+    }
+    out.push_str(&format!(
+        "\nNext better question\n  {}\n\nConcepts\n  {}\n\nBoundary\n  Market literacy only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions.",
+        i.next_question,
+        i.concepts.join(", ")
+    ));
+    out
+}
+
 fn render_feedback(f: &Feedback) -> String {
     let mut out = format!(
-        "Feedback · {}\n\nClaim\n  {}\n\nGood\n",
-        f.timestamp, f.claim
+        "Feedback · {}\n\nClaim\n  {}\n\nThesis type\n  {}\n\nGood\n",
+        f.timestamp, f.claim, f.thesis_type
     );
     for x in &f.good {
         out.push_str(&format!("  - {x}\n"));
@@ -679,8 +1154,12 @@ fn json_field(line: &str, key: &str) -> Option<String> {
 
 fn render_review(limit: usize) -> String {
     let events = read_events(limit);
+    render_review_from_events(&events, &journal_path().display().to_string())
+}
+
+fn render_review_from_events(events: &[String], journal: &str) -> String {
     if events.is_empty() {
-        return "No market-pulse journal entries yet. Start with `mp now`, then `mp think \"...\"`.".into();
+        return "No market-pulse journal entries yet. Start with `mp \"your market question\"`, then `mp think \"...\"`.".into();
     }
     let pulses = events
         .iter()
@@ -689,6 +1168,14 @@ fn render_review(limit: usize) -> String {
     let thoughts = events
         .iter()
         .filter(|l| l.contains("\"type\":\"thought\""))
+        .count();
+    let inquiries = events
+        .iter()
+        .filter(|l| l.contains("\"type\":\"inquiry\""))
+        .count();
+    let research_inquiries = events
+        .iter()
+        .filter(|l| l.contains("\"type\":\"research_inquiry\""))
         .count();
     let feedback = events
         .iter()
@@ -701,17 +1188,32 @@ fn render_review(limit: usize) -> String {
         ("oil", 0),
         ("korea", 0),
         ("crypto", 0),
+        ("event", 0),
+        ("positioning", 0),
     ];
-    for line in events.iter().filter(|l| l.contains("\"type\":\"thought\"")) {
-        let text = json_field(line, "text").unwrap_or_default();
-        for tag in detect_tags(&text) {
+    let mut thesis_types = Vec::new();
+    for line in events.iter().filter(|l| {
+        l.contains("\"type\":\"thought\"")
+            || l.contains("\"type\":\"inquiry\"")
+            || l.contains("\"type\":\"research_inquiry\"")
+    }) {
+        let text = json_field(line, "text")
+            .or_else(|| json_field(line, "question"))
+            .unwrap_or_default();
+        let tags = detect_tags(&text);
+        if !tags.is_empty() {
+            thesis_types.push(detect_thesis_type(&tags));
+        }
+        for tag in tags {
             if let Some((_, count)) = counts.iter_mut().find(|(name, _)| *name == tag) {
                 *count += 1;
             }
         }
     }
     counts.sort_by(|a, b| b.1.cmp(&a.1));
-    let mut out = format!("Market Pulse Review\n\nJournal: {}\nEntries scanned: {} · pulses {} · thoughts {} · feedback {}\n\nRepeated themes\n", journal_path().display(), events.len(), pulses, thoughts, feedback);
+    thesis_types.sort();
+    thesis_types.dedup();
+    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), pulses, inquiries, research_inquiries, thoughts, feedback);
     let mut wrote = false;
     for (tag, count) in counts.into_iter().filter(|(_, c)| *c > 0).take(6) {
         wrote = true;
@@ -720,7 +1222,15 @@ fn render_review(limit: usize) -> String {
     if !wrote {
         out.push_str("  - Not enough tagged thoughts yet\n");
     }
-    out.push_str("\nSuggested drill\n  For the next 3 notes, explicitly separate:\n  1. market-wide signal\n  2. sector-specific signal\n  3. alternative explanation");
+    out.push_str("\nQuestion / thesis habits\n");
+    if thesis_types.is_empty() {
+        out.push_str("  - Not enough inquiry/thesis history yet; ask one rough question with `mp \"...\"`.\n");
+    } else {
+        for t in thesis_types.iter().take(5) {
+            out.push_str(&format!("  - You have been using a {t} lens.\n"));
+        }
+    }
+    out.push_str("\nSuggested drill\n  For the next 3 notes, explicitly separate:\n  1. market-wide signal\n  2. sector-specific signal\n  3. event/positioning alternative\n  4. what would falsify the view");
     out
 }
 
@@ -730,6 +1240,37 @@ fn pulse_json(p: &Pulse) -> String {
 
 fn thought_json(text: &str, linked: Option<&str>) -> String {
     format!("{{\"type\":\"thought\",\"timestamp\":\"{}\",\"text\":\"{}\",\"linked_pulse_timestamp\":{}}}", timestamp(), esc(text), opt_json(linked))
+}
+
+fn inquiry_json(i: &Inquiry) -> String {
+    format!(
+        "{{\"type\":\"inquiry\",\"timestamp\":\"{}\",\"question\":\"{}\",\"linked_pulse_timestamp\":{},\"thesis_type\":\"{}\",\"concepts\":\"{}\"}}",
+        esc(&i.timestamp),
+        esc(&i.question),
+        opt_json(i.linked.as_deref()),
+        esc(&i.thesis_type),
+        esc(&i.concepts.join(", "))
+    )
+}
+
+fn research_inquiry_json(i: &Inquiry, bundle: &ResearchBundle) -> String {
+    let source_titles = bundle
+        .sources
+        .iter()
+        .map(|s| s.title.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!(
+        "{{\"type\":\"research_inquiry\",\"timestamp\":\"{}\",\"question\":\"{}\",\"linked_pulse_timestamp\":{},\"provider\":\"{}\",\"source_count\":{},\"source_titles\":\"{}\",\"thesis_type\":\"{}\",\"concepts\":\"{}\"}}",
+        esc(&i.timestamp),
+        esc(&i.question),
+        opt_json(i.linked.as_deref()),
+        esc(&bundle.provider),
+        bundle.sources.len(),
+        esc(&source_titles),
+        esc(&i.thesis_type),
+        esc(&i.concepts.join(", "))
+    )
 }
 
 fn feedback_json(f: &Feedback) -> String {
@@ -785,20 +1326,202 @@ fn session() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routes_bare_question_and_ask_to_inquiry() {
+        let bare = vec!["금리가".into(), "내려간".into(), "이유?".into()];
+        assert_eq!(
+            parse_command(&bare).unwrap(),
+            CommandKind::Inquiry {
+                text: "금리가 내려간 이유?".into(),
+                no_save: false,
+            }
+        );
+
+        let ask = vec![
+            "ask".into(),
+            "대형".into(),
+            "IPO가".into(),
+            "영향?".into(),
+            "--no-save".into(),
+        ];
+        assert_eq!(
+            parse_command(&ask).unwrap(),
+            CommandKind::Inquiry {
+                text: "대형 IPO가 영향?".into(),
+                no_save: true,
+            }
+        );
+        assert!(parse_command(&["ask".into()]).is_err());
+        assert!(parse_command(&["--bad".into()]).is_err());
+    }
+
+    #[test]
+    fn routes_research_subcommand_and_flag() {
+        let research = vec![
+            "research".into(),
+            "금리".into(),
+            "하락이".into(),
+            "성장주에".into(),
+            "좋음?".into(),
+            "--no-save".into(),
+        ];
+        assert_eq!(
+            parse_command(&research).unwrap(),
+            CommandKind::Research {
+                text: "금리 하락이 성장주에 좋음?".into(),
+                no_save: true,
+            }
+        );
+
+        let flagged = vec![
+            "대형".into(),
+            "IPO가".into(),
+            "영향?".into(),
+            "--research".into(),
+        ];
+        assert_eq!(
+            parse_command(&flagged).unwrap(),
+            CommandKind::Research {
+                text: "대형 IPO가 영향?".into(),
+                no_save: false,
+            }
+        );
+        assert!(parse_command(&["research".into()]).is_err());
+    }
+
     #[test]
     fn detects_korean_tags() {
-        let tags = detect_tags("금리가 부담인데 반도체가 버티고 달러도 강하다");
+        let tags =
+            detect_tags("금리가 부담인데 반도체가 버티고 달러도 강하다. 대형 IPO 상장도 있다");
         assert!(tags.contains(&"rates"));
         assert!(tags.contains(&"semis"));
         assert!(tags.contains(&"fx"));
+        assert!(tags.contains(&"event"));
+    }
+
+    #[test]
+    fn inquiry_renders_required_sections_and_boundary() {
+        let inquiry = make_inquiry("금리가 내려갔다는데 이게 완화 기대 때문임?", None);
+        let out = render_inquiry(&inquiry);
+        for section in [
+            "Question breakdown",
+            "Possible explanations",
+            "Evidence to check",
+            "Counter-view",
+            "Next better question",
+            "Boundary",
+            "not investment advice",
+        ] {
+            assert!(out.contains(section), "missing section: {section}");
+        }
+        assert!(inquiry.thesis_type.contains("rates"));
+    }
+
+    #[test]
+    fn research_output_renders_no_provider_fallback_and_boundary() {
+        let inquiry = make_inquiry("금리 하락이 성장주에 좋은 신호임?", None);
+        let query = ResearchQuery {
+            question: inquiry.question.clone(),
+            linked: None,
+        };
+        let bundle = research_bundle_from_provider(&NoopResearchProvider, &query);
+        let out = render_research_inquiry(&inquiry, &bundle);
+        for section in [
+            "Research-backed Inquiry",
+            "Sources checked",
+            "No configured live research provider",
+            "inference scaffolding",
+            "What the sources suggest",
+            "Evidence against / counter-view",
+            "Data to check next",
+            "Boundary",
+            "not investment advice",
+        ] {
+            assert!(out.contains(section), "missing section: {section}");
+        }
+        assert_eq!(bundle.sources.len(), 0);
+    }
+
+    #[test]
+    fn research_output_renders_sources_with_metadata() {
+        let inquiry = make_inquiry("대형 IPO 때문에 성장주가 강한 걸까?", None);
+        let bundle = fixture_research_bundle();
+        let out = render_research_inquiry(&inquiry, &bundle);
+        assert!(out.contains("Fixture IPO calendar"));
+        assert!(out.contains("market-pulse fixture"));
+        assert!(out.contains("fixture://ipo-calendar"));
+        assert!(out.contains("Relevance: event timing"));
+        assert!(out.contains("Source-backed:"));
+    }
+
+    #[test]
+    fn research_history_records_metadata() {
+        let inquiry = make_inquiry("금리와 반도체가 같이 움직이나?", Some("pulse-ts".into()));
+        let bundle = fixture_research_bundle();
+        let json = research_inquiry_json(&inquiry, &bundle);
+        assert!(json.contains("\"type\":\"research_inquiry\""));
+        assert!(json.contains("\"provider\":\"fixture\""));
+        assert!(json.contains("\"source_count\":1"));
+        assert!(json.contains("Fixture IPO calendar"));
+        assert!(json.contains("\"linked_pulse_timestamp\":\"pulse-ts\""));
+    }
+
+    #[test]
+    fn provider_error_degrades_gracefully() {
+        struct ErrorProvider;
+        impl ResearchProvider for ErrorProvider {
+            fn name(&self) -> &'static str {
+                "error-fixture"
+            }
+
+            fn research(&self, _query: &ResearchQuery) -> Result<ResearchBundle, String> {
+                Err("network disabled in phase 1".into())
+            }
+        }
+
+        let query = ResearchQuery {
+            question: "달러 강세가 코스피에 부담임?".into(),
+            linked: None,
+        };
+        let bundle = research_bundle_from_provider(&ErrorProvider, &query);
+        assert_eq!(bundle.provider, "error-fixture");
+        assert!(bundle.sources.is_empty());
+        assert!(bundle.notes.iter().any(|n| n.contains("failed gracefully")));
     }
 
     #[test]
     fn feedback_has_counter_view() {
         let f = make_feedback("금리가 부담인데도 반도체가 버티는 것 같다", None);
         assert!(f.claim.contains("rates"));
+        assert!(f.thesis_type.contains("rates/growth"));
         assert!(f.counter.iter().any(|x| x.contains("Semis strength")));
         assert!(f.check.iter().any(|x| x.to_lowercase().contains("yields")));
+    }
+
+    #[test]
+    fn event_thesis_exposes_timing_evidence_gap() {
+        let f = make_feedback(
+            "대형 IPO 상장 때문에 금리 완화 기대처럼 보이는 것 아닐까",
+            None,
+        );
+        assert!(f.thesis_type.contains("event-driven"));
+        assert!(f.check.iter().any(|x| x.to_lowercase().contains("timing")));
+    }
+
+    #[test]
+    fn review_summarizes_inquiries_and_habits() {
+        let events = vec![
+            "{\"type\":\"inquiry\",\"timestamp\":\"t\",\"question\":\"금리와 IPO 상장이 성장주에 영향?\",\"thesis_type\":\"event-driven / supply-calendar thesis\",\"concepts\":\"rates vs growth\"}".into(),
+            "{\"type\":\"research_inquiry\",\"timestamp\":\"t\",\"question\":\"달러가 코스피에 부담?\",\"provider\":\"noop\",\"source_count\":0,\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"t\",\"text\":\"달러가 강한데 코스피가 버틴다\",\"linked_pulse_timestamp\":null}".into(),
+        ];
+        let out = render_review_from_events(&events, "/tmp/journal.jsonl");
+        assert!(out.contains("inquiries 1"));
+        assert!(out.contains("research 1"));
+        assert!(out.contains("Question / thesis habits"));
+        assert!(out.contains("event"));
+        assert!(out.contains("rates"));
     }
 
     #[test]
@@ -831,6 +1554,8 @@ mod tests {
         ]);
         assert!(p.tensions.iter().any(|t| t.contains("rates")));
         assert!(!p.question.is_empty());
+        assert!(!question_seeds_for(&p).is_empty());
+        assert!(render_pulse(&p, false).contains("Market puzzle / question seeds"));
     }
 
     fn compose_test_pulse(assets: Vec<Asset>) -> Pulse {
@@ -853,6 +1578,21 @@ mod tests {
             drivers,
             tensions,
             notes: vec![],
+        }
+    }
+
+    fn fixture_research_bundle() -> ResearchBundle {
+        ResearchBundle {
+            provider: "fixture".into(),
+            sources: vec![ResearchSource {
+                title: "Fixture IPO calendar".into(),
+                publisher: "market-pulse fixture".into(),
+                url: "fixture://ipo-calendar".into(),
+                published_at: Some("2026-04-20T00:00:00Z".into()),
+                relevance: "event timing".into(),
+                evidence: "The fixture says event timing must precede the market move.".into(),
+            }],
+            notes: vec!["deterministic fixture source for tests".into()],
         }
     }
 }
