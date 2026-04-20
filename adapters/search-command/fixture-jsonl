@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+query=${*:-"fixture market question"}
+
+json_escape() {
+  awk 'BEGIN {
+    s = ARGV[1]
+    ARGV[1] = ""
+    gsub(/\\/, "\\\\", s)
+    gsub(/"/, "\\\"", s)
+    gsub(/\t/, "\\t", s)
+    gsub(/\r/, "\\r", s)
+    gsub(/\n/, "\\n", s)
+    printf "%s", s
+  }' "$1"
+}
+
+evidence=$(json_escape "Fixture source row for query: $query")
+
+printf '%s%s%s\n' \
+  '{"title":"Fixture search-command source","publisher":"market-pulse fixture","url":"fixture://search-command/demo","evidence":"' \
+  "$evidence" \
+  '","relevance":"Demonstrates the MARKET_PULSE_SEARCH_CMD JSONL source contract","published_at":"fixture-time"}'

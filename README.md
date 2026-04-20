@@ -78,13 +78,16 @@ Output includes:
 - explicit market-literacy boundary
 
 By default, research mode does not fetch RSS/SEC/news/API data over the network.
-Built-in providers can be added behind the provider boundary later.
+Built-in providers can be added behind the provider boundary later. For now,
+use the search-command adapter kit to prototype provider wrappers outside the
+core.
 
 For an opt-in external search bridge, set `MARKET_PULSE_SEARCH_CMD` to a command
-template that contains `{query}` and emits JSON Lines source rows:
+template that contains `{query}` and emits JSON Lines source rows. A runnable
+provider-agnostic starter kit lives in [`adapters/search-command/`](adapters/search-command/):
 
 ```bash
-MARKET_PULSE_SEARCH_CMD='my-search --json {query}' \
+MARKET_PULSE_SEARCH_CMD='./adapters/search-command/fixture-jsonl {query}' \
   mp "금리 하락이 성장주에 좋은 신호임?" --research
 ```
 

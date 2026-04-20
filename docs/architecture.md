@@ -22,7 +22,9 @@ Codex/Claude adapters -> mp Rust binary -> quote + local inquiry/research lenses
 Initial code may keep these simple, but the boundaries should stay visible:
 
 - source hooks: quotes, RSS, macro data, filings
-- research provider hooks: noop fallback now, optional `MARKET_PULSE_SEARCH_CMD` JSONL bridge, RSS/search/API providers later
+- research provider hooks: noop fallback now, optional
+  `MARKET_PULSE_SEARCH_CMD` JSONL bridge, `adapters/search-command/` fixture
+  kit, RSS/search/API providers later
 - lens hooks: risk-on/off, rates vs growth, dollar liquidity, Korea market, AI/semis, IPO/event, positioning/flow
 - inquiry hooks: question breakdown, possible explanations, evidence checks, counter-view, next better question
 - research inquiry hooks: source metadata, source-backed claims, no-source fallback, data-to-check prompts
@@ -48,6 +50,10 @@ The MVP intentionally avoids Rust crate dependencies. It uses the standard libra
 
 `MARKET_PULSE_SEARCH_CMD` is a restricted bridge for local search tooling: the template must contain `{query}`, it is parsed into argv with simple quote-aware grouping, executed without a shell, capped by a 5 second timeout, and limited to the first 20 non-empty JSONL rows. JSON string escapes are decoded before rendering.
 
-The external command supplies source metadata only; market-pulse keeps ownership of rendering, counter-views, data-to-check prompts, next questions, journaling, and safety boundaries.
+The external command supplies source metadata only; market-pulse keeps ownership
+of rendering, counter-views, data-to-check prompts, next questions, journaling,
+and safety boundaries. The current `adapters/search-command/` kit is
+intentionally provider-agnostic and fixture-only; live provider selection
+remains deferred.
 
 Built-in RSS/SEC/news fetches, paid data vendors, article body storage, and background daemons are outside the current MVP and require explicit confirmation before implementation.

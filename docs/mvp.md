@@ -68,6 +68,12 @@ Acceptance criteria:
 - `mp`
 - `market-pulse`
 
+## Adapter kits
+
+- `adapters/search-command/` provides a provider-agnostic fixture kit for
+  `MARKET_PULSE_SEARCH_CMD`. It is executable documentation for the JSONL source
+  contract, not a live provider integration.
+
 ## Deferred
 
 - TUI
