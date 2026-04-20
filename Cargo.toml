@@ -1,0 +1,10 @@
+[package]
+name = "market-pulse"
+version = "0.1.0"
+edition = "2021"
+description = "CLI-first market thinking journal for short market context, user reflection, and review."
+license = "MIT"
+authors = ["minislively"]
+repository = "https://github.com/minislively/market-pulse"
+keywords = ["cli", "markets", "finance", "journal", "learning"]
+categories = ["command-line-utilities"]

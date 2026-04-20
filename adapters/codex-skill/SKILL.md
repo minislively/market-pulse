@@ -23,8 +23,9 @@ If the user invokes `$mp` without arguments, treat it as `$mp now`.
 
 ## Fallback
 
-If the `mp` executable is missing, tell the user to install the repo locally:
+If the `mp` executable is missing, install the Rust CLI locally:
 
 ```bash
-python -m pip install -e .
+cd ~/dev/market-pulse
+cargo install --path . --force
 ```

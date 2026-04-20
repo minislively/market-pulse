@@ -1,6 +1,6 @@
 # MVP
 
-The MVP is intentionally small.
+The MVP is intentionally small and implemented as a Rust CLI.
 
 ## Commands
 
@@ -29,6 +29,13 @@ Acceptance criteria:
 - Reads recent JSONL journal events.
 - Surfaces repeated themes and concepts.
 - Suggests one reasoning drill.
+
+## Install target
+
+`cargo install --path . --force` should provide both executable names:
+
+- `mp`
+- `market-pulse`
 
 ## Deferred
 

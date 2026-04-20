@@ -1,6 +1,6 @@
 # market-pulse
 
-`market-pulse` is a CLI-first market thinking journal.
+`market-pulse` is a Rust CLI-first market thinking journal.
 
 It helps you read short market context, write your own interpretation, get structured feedback, and review your reasoning over time — without leaving the terminal.
 
@@ -36,6 +36,8 @@ Prints a compact market pulse card:
 - one observation question
 - one concept to watch
 
+Live quotes are fetched through the Yahoo Finance chart endpoint by shelling out to `curl`. If a quote fails, the card still renders so the learning loop is not blocked.
+
 ### `mp think "..."`
 
 Records your market interpretation and returns structured feedback:
@@ -67,10 +69,31 @@ MARKET_PULSE_HOME=/tmp/mp mp now
 
 ## Install locally
 
+Prerequisites:
+
+- Rust/Cargo
+- `curl` on `PATH`
+
 ```bash
-python -m pip install -e .
+git clone https://github.com/minislively/market-pulse.git
+cd market-pulse
+cargo install --path . --force
 mp now
 ```
+
+For local development:
+
+```bash
+make test
+make smoke
+```
+
+## Adapters
+
+The repo includes thin adapters that call the same standalone `mp` binary:
+
+- Codex skill: `adapters/codex-skill/SKILL.md`
+- Claude Code slash command: `adapters/claude-command/mp/COMMAND.md`
 
 ## Design
 

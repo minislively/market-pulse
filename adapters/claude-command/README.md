@@ -4,7 +4,14 @@ This adapter exposes `market-pulse` as a Claude Code slash command.
 
 ## Install
 
-Copy or symlink the `mp` command directory into Claude's commands folder:
+First install the Rust CLI:
+
+```bash
+cd ~/dev/market-pulse
+cargo install --path . --force
+```
+
+Then copy or symlink the `mp` command directory into Claude's commands folder:
 
 ```bash
 mkdir -p ~/.claude/commands
