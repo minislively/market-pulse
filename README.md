@@ -59,8 +59,8 @@ mp ask "대형 IPO가 시장 상승 이유가 될 수 있음?"
 
 ### `mp research "question"` / `mp "question" --research`
 
-Phase 1 research mode. It proves the source-backed inquiry contract without
-making live network/news providers mandatory yet:
+Research mode keeps the source-backed inquiry contract without
+making built-in network/news providers mandatory yet:
 
 ```bash
 mp research "금리 하락이 성장주에 좋은 신호임?"
@@ -77,8 +77,26 @@ Output includes:
 - next better question
 - explicit market-literacy boundary
 
-Phase 1 intentionally does not fetch RSS/SEC/news/API data over the network by
-default. Real providers can be added behind the provider boundary later.
+By default, research mode does not fetch RSS/SEC/news/API data over the network.
+Built-in providers can be added behind the provider boundary later.
+
+For an opt-in external search bridge, set `MARKET_PULSE_SEARCH_CMD` to a command
+template that contains `{query}` and emits JSON Lines source rows:
+
+```bash
+MARKET_PULSE_SEARCH_CMD='my-search --json {query}' \
+  mp "금리 하락이 성장주에 좋은 신호임?" --research
+```
+
+Each output line should be source metadata:
+
+```json
+{"title":"...", "publisher":"...", "url":"...", "evidence":"...", "relevance":"...", "published_at":"..."}
+```
+
+The hook is deliberately restricted: no shell execution, 5 second timeout, and
+at most 20 JSONL source rows. If the command fails, `mp` falls back to the
+normal inference scaffold instead of crashing.
 
 ### `mp now`
 

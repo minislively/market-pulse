@@ -25,7 +25,10 @@ mp "시장 질문" --research
 
 Research mode keeps the same learning loop, but adds an explicit source boundary:
 show sources when a provider supplies them, otherwise say clearly that the answer
-is inference scaffolding and list what data should be checked next.
+is inference scaffolding and list what data should be checked next. The current
+bridge is intentionally opt-in: `MARKET_PULSE_SEARCH_CMD` can attach local search
+tooling that emits JSONL source metadata, while the core remains CLI-first and
+provider-agnostic.
 
 ## Boundaries
 

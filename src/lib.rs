@@ -3,7 +3,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread::sleep;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug)]
 struct Asset {
@@ -87,10 +88,54 @@ impl ResearchProvider for NoopResearchProvider {
             provider: self.name().into(),
             sources: Vec::new(),
             notes: vec![
-                "Phase 1 research mode is deterministic: no live RSS/API provider is configured yet."
+                "No built-in live RSS/API provider is configured; research mode is source-optional."
                     .into(),
-                format!("{linked_note}; question scaffold is inference-only until a provider is added."),
+                format!("{linked_note}; question scaffold is inference-only until sources are supplied."),
             ],
+        })
+    }
+}
+
+struct SearchCommandProvider {
+    template: String,
+}
+
+impl ResearchProvider for SearchCommandProvider {
+    fn name(&self) -> &'static str {
+        "search-cmd"
+    }
+
+    fn research(&self, query: &ResearchQuery) -> Result<ResearchBundle, String> {
+        let args = search_command_args(&self.template, &query.question)?;
+        let output = run_command_with_timeout(&args, Duration::from_secs(5))?;
+        if !output.status.success() {
+            return Err(format!(
+                "search command exited with status {}",
+                output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let (sources, invalid_rows) = parse_search_jsonl(&stdout, 20);
+        let mut notes = vec![
+            "MARKET_PULSE_SEARCH_CMD supplied structured source metadata.".into(),
+            "External command output is treated as source material; market-pulse still generates the reasoning scaffold.".into(),
+        ];
+        if invalid_rows > 0 {
+            notes.push(format!(
+                "{invalid_rows} invalid JSONL source row(s) skipped."
+            ));
+        }
+        if sources.is_empty() {
+            notes.push("Search command returned no valid JSONL source rows; falling back to inference scaffolding.".into());
+        }
+        Ok(ResearchBundle {
+            provider: self.name().into(),
+            sources,
+            notes,
         })
     }
 }
@@ -254,14 +299,23 @@ fn research_inquiry(question: &str, no_save: bool) -> Result<(), String> {
         question: question.trim().to_string(),
         linked: linked.clone(),
     };
-    let provider = NoopResearchProvider;
-    let bundle = research_bundle_from_provider(&provider, &query);
+    let bundle = research_bundle(&query);
     let inquiry = make_inquiry(&query.question, linked);
     if !no_save {
         append_event(&research_inquiry_json(&inquiry, &bundle))?;
     }
     println!("{}", render_research_inquiry(&inquiry, &bundle));
     Ok(())
+}
+
+fn research_bundle(query: &ResearchQuery) -> ResearchBundle {
+    match env::var("MARKET_PULSE_SEARCH_CMD") {
+        Ok(template) if !template.trim().is_empty() => {
+            let provider = SearchCommandProvider { template };
+            research_bundle_from_provider(&provider, query)
+        }
+        _ => research_bundle_from_provider(&NoopResearchProvider, query),
+    }
 }
 
 fn research_bundle_from_provider(
@@ -275,6 +329,84 @@ fn research_bundle_from_provider(
             sources: Vec::new(),
             notes: vec![format!("research provider failed gracefully: {err}")],
         })
+}
+
+fn search_command_args(template: &str, query: &str) -> Result<Vec<String>, String> {
+    let mut saw_query = false;
+    let args = template
+        .split_whitespace()
+        .map(|part| {
+            if part.contains("{query}") {
+                saw_query = true;
+                part.replace("{query}", query)
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+    if args.is_empty() {
+        return Err("MARKET_PULSE_SEARCH_CMD is empty".into());
+    }
+    if !saw_query {
+        return Err("MARKET_PULSE_SEARCH_CMD must include {query}".into());
+    }
+    Ok(args)
+}
+
+fn run_command_with_timeout(
+    args: &[String],
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = Command::new(&args[0])
+        .args(&args[1..])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return child.wait_with_output().map_err(|e| e.to_string());
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "search command timed out after {}s",
+                timeout.as_secs()
+            ));
+        }
+        sleep(Duration::from_millis(25));
+    }
+}
+
+fn parse_search_jsonl(text: &str, limit: usize) -> (Vec<ResearchSource>, usize) {
+    let mut sources = Vec::new();
+    let mut invalid = 0;
+    for line in text.lines().filter(|l| !l.trim().is_empty()).take(limit) {
+        match research_source_from_json_line(line) {
+            Some(source) => sources.push(source),
+            None => invalid += 1,
+        }
+    }
+    (sources, invalid)
+}
+
+fn research_source_from_json_line(line: &str) -> Option<ResearchSource> {
+    let title = json_field(line, "title").unwrap_or_else(|| "Untitled source".into());
+    let publisher = json_field(line, "publisher").unwrap_or_else(|| "unknown publisher".into());
+    let url = json_field(line, "url").unwrap_or_default();
+    let evidence = json_field(line, "evidence")?;
+    let relevance = json_field(line, "relevance").unwrap_or_else(|| "source evidence".into());
+    let published_at = json_field(line, "published_at");
+    Some(ResearchSource {
+        title,
+        publisher,
+        url,
+        published_at,
+        relevance,
+        evidence,
+    })
 }
 
 fn review(args: &[String]) -> Result<(), String> {
@@ -1014,7 +1146,7 @@ fn render_research_inquiry(i: &Inquiry, bundle: &ResearchBundle) -> String {
     }
     out.push_str("\nSources checked\n");
     if bundle.sources.is_empty() {
-        out.push_str("  - No configured live research provider returned sources in Phase 1.\n");
+        out.push_str("  - No configured research source returned metadata.\n");
         out.push_str(
             "  - Treat the analysis below as inference scaffolding, not source-backed fact.\n",
         );
@@ -1430,7 +1562,7 @@ mod tests {
         for section in [
             "Research-backed Inquiry",
             "Sources checked",
-            "No configured live research provider",
+            "No configured research source",
             "inference scaffolding",
             "What the sources suggest",
             "Evidence against / counter-view",
@@ -1453,6 +1585,79 @@ mod tests {
         assert!(out.contains("fixture://ipo-calendar"));
         assert!(out.contains("Relevance: event timing"));
         assert!(out.contains("Source-backed:"));
+    }
+
+    #[test]
+    fn search_command_template_uses_query_placeholder_without_shell() {
+        let args = search_command_args("fixture-search --json {query}", "금리 하락 신호")
+            .expect("template should parse");
+        assert_eq!(args[0], "fixture-search");
+        assert_eq!(args[1], "--json");
+        assert_eq!(args[2], "금리 하락 신호");
+        assert!(search_command_args("fixture-search --json", "질문").is_err());
+    }
+
+    #[test]
+    fn search_jsonl_parses_sources_and_caps_rows() {
+        let mut lines = Vec::new();
+        for idx in 0..25 {
+            lines.push(format!(
+                "{{\"title\":\"Source {idx}\",\"publisher\":\"fixture\",\"url\":\"fixture://{idx}\",\"evidence\":\"Evidence {idx}\",\"relevance\":\"test\"}}"
+            ));
+        }
+        lines.push("not json".into());
+        let (sources, invalid) = parse_search_jsonl(&lines.join("\n"), 20);
+        assert_eq!(sources.len(), 20);
+        assert_eq!(invalid, 0);
+        assert_eq!(sources[0].title, "Source 0");
+        assert_eq!(sources[19].url, "fixture://19");
+    }
+
+    #[test]
+    fn invalid_search_rows_do_not_crash() {
+        let (sources, invalid) = parse_search_jsonl(
+            "{\"title\":\"Missing evidence\"}\n{\"title\":\"Good\",\"publisher\":\"fixture\",\"url\":\"fixture://ok\",\"evidence\":\"Useful evidence\",\"relevance\":\"test\"}",
+            20,
+        );
+        assert_eq!(sources.len(), 1);
+        assert_eq!(invalid, 1);
+        assert_eq!(sources[0].evidence, "Useful evidence");
+    }
+
+    #[test]
+    fn search_command_provider_reads_jsonl_sources() {
+        let provider = SearchCommandProvider {
+            template:
+                "/bin/echo {\"title\":\"Fixture\",\"publisher\":\"test\",\"url\":\"fixture://source\",\"evidence\":\"{query}\",\"relevance\":\"unit\"}"
+                    .into(),
+        };
+        let query = ResearchQuery {
+            question: "금리 하락 신호".into(),
+            linked: None,
+        };
+        let bundle = research_bundle_from_provider(&provider, &query);
+        assert_eq!(bundle.provider, "search-cmd");
+        assert_eq!(bundle.sources.len(), 1);
+        assert_eq!(bundle.sources[0].evidence, "금리 하락 신호");
+        assert!(bundle
+            .notes
+            .iter()
+            .any(|n| n.contains("MARKET_PULSE_SEARCH_CMD")));
+    }
+
+    #[test]
+    fn search_command_failure_degrades_gracefully() {
+        let provider = SearchCommandProvider {
+            template: "/definitely/missing-market-pulse-search {query}".into(),
+        };
+        let query = ResearchQuery {
+            question: "달러 강세".into(),
+            linked: None,
+        };
+        let bundle = research_bundle_from_provider(&provider, &query);
+        assert_eq!(bundle.provider, "search-cmd");
+        assert!(bundle.sources.is_empty());
+        assert!(bundle.notes.iter().any(|n| n.contains("failed gracefully")));
     }
 
     #[test]

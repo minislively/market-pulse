@@ -24,6 +24,7 @@ If the user invokes `$mp` without arguments, treat it as `$mp now`.
 - Frame output as market literacy and reasoning practice.
 - Prefer: question breakdown, possible explanations, evidence checks, counter-views, next better questions.
 - In research mode, preserve source metadata/no-provider fallback and distinguish source-backed material from inference scaffolding.
+- If `MARKET_PULSE_SEARCH_CMD` is configured, let `mp` use it as the restricted JSONL source bridge; do not reimplement search in the skill prompt.
 - Avoid: sensational headlines, numbers-only dashboards, false certainty.
 
 ## Fallback

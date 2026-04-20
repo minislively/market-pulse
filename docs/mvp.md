@@ -25,7 +25,10 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Routes both the explicit subcommand and `--research` flag to research-backed inquiry mode.
-- Uses a `ResearchProvider`-style boundary with deterministic fixture/noop behavior in Phase 1.
+- Uses a `ResearchProvider`-style boundary with deterministic noop behavior when no provider is configured.
+- Supports an opt-in `MARKET_PULSE_SEARCH_CMD` external command hook for JSONL source metadata.
+- Executes the search hook without a shell, with `{query}` substitution, a 5 second timeout, and at most 20 JSONL rows parsed.
+- Falls back to inference scaffolding if the hook is unset, invalid, times out, exits non-zero, or returns no valid source rows.
 - Renders source metadata when available.
 - Renders a clear no-provider/no-source fallback when no live provider is configured.
 - Distinguishes source-backed material from inference scaffolding.
@@ -71,7 +74,7 @@ Acceptance criteria:
 - charts
 - portfolio support
 - backtesting
-- live RSS/SEC/news network providers
+- built-in live RSS/SEC/news network providers
 - Brave/Tavily/NewsAPI/SerpApi/Alpha Vantage/FRED integrations
 - article body storage or summarization
 - external plugin loading

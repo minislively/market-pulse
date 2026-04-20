@@ -31,7 +31,8 @@ description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색
    - `review`: `mp review` 실행
 2. 가능한 한 로컬 CLI를 직접 실행합니다.
 3. CLI 출력은 핵심만 정리하되, 중요한 피드백 구조는 유지합니다.
-4. `mp` 실행 파일이 없으면 아래 설치 안내를 제공합니다.
+4. `MARKET_PULSE_SEARCH_CMD`가 설정되어 있으면 `mp`가 제한형 JSONL source bridge로 사용하게 두고, slash command 프롬프트에서 검색을 재구현하지 않습니다.
+5. `mp` 실행 파일이 없으면 아래 설치 안내를 제공합니다.
 
 ```bash
 cd ~/dev/market-pulse
@@ -44,6 +45,7 @@ cargo install --path . --force
 - 투자 조언이 아니라 시장 문해력과 사고 훈련으로 프레이밍합니다.
 - 선호 구조: question breakdown, possible explanations, evidence to check, counter-view, next better question.
 - research 모드에서는 source metadata/no-provider fallback과 source-backed vs inference 구분을 유지합니다.
+- `MARKET_PULSE_SEARCH_CMD`가 설정되어 있으면 로컬 CLI가 외부 source metadata를 받아오며, command adapter는 그 경계를 보존합니다.
 - 피할 것: 자극적 헤드라인, 숫자만 나열, 단일 정답처럼 말하기.
 
 ## Examples
