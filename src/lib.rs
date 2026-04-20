@@ -333,14 +333,14 @@ fn research_bundle_from_provider(
 
 fn search_command_args(template: &str, query: &str) -> Result<Vec<String>, String> {
     let mut saw_query = false;
-    let args = template
-        .split_whitespace()
+    let args = split_template_args(template)?
+        .into_iter()
         .map(|part| {
             if part.contains("{query}") {
                 saw_query = true;
                 part.replace("{query}", query)
             } else {
-                part.to_string()
+                part
             }
         })
         .collect::<Vec<_>>();
@@ -349,6 +349,70 @@ fn search_command_args(template: &str, query: &str) -> Result<Vec<String>, Strin
     }
     if !saw_query {
         return Err("MARKET_PULSE_SEARCH_CMD must include {query}".into());
+    }
+    Ok(args)
+}
+
+fn split_template_args(template: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut has_current = false;
+
+    for ch in template.chars() {
+        if escaped {
+            current.push(match ch {
+                'n' if quote == Some('"') => '\n',
+                'r' if quote == Some('"') => '\r',
+                't' if quote == Some('"') => '\t',
+                other => other,
+            });
+            escaped = false;
+            has_current = true;
+            continue;
+        }
+
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            has_current = true;
+            continue;
+        }
+
+        match quote {
+            Some(q) if ch == q => {
+                quote = None;
+                has_current = true;
+            }
+            Some(_) => {
+                current.push(ch);
+                has_current = true;
+            }
+            None if (ch == '\'' || ch == '"') && current.is_empty() => {
+                quote = Some(ch);
+                has_current = true;
+            }
+            None if ch.is_whitespace() => {
+                if has_current {
+                    args.push(std::mem::take(&mut current));
+                    has_current = false;
+                }
+            }
+            None => {
+                current.push(ch);
+                has_current = true;
+            }
+        }
+    }
+
+    if escaped {
+        return Err("MARKET_PULSE_SEARCH_CMD has a dangling escape".into());
+    }
+    if quote.is_some() {
+        return Err("MARKET_PULSE_SEARCH_CMD has an unterminated quote".into());
+    }
+    if has_current {
+        args.push(current);
     }
     Ok(args)
 }
@@ -1277,11 +1341,47 @@ fn latest_pulse_timestamp() -> Option<String> {
 }
 
 fn json_field(line: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\":\"");
-    let start = line.find(&needle)? + needle.len();
-    let rest = &line[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].replace("\\\"", "\"").replace("\\n", "\n"))
+    let key_needle = format!("\"{key}\"");
+    let key_start = line.find(&key_needle)? + key_needle.len();
+    let after_key = &line[key_start..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let value_start = after_colon.strip_prefix('"')?;
+    parse_json_string(value_start)
+}
+
+fn parse_json_string(text_after_opening_quote: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = text_after_opening_quote.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => return Some(out),
+            '\\' => {
+                let escaped = chars.next()?;
+                match escaped {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'b' => out.push('\u{0008}'),
+                    'f' => out.push('\u{000c}'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'u' => {
+                        let mut code = String::new();
+                        for _ in 0..4 {
+                            code.push(chars.next()?);
+                        }
+                        let value = u32::from_str_radix(&code, 16).ok()?;
+                        out.push(char::from_u32(value)?);
+                    }
+                    _ => return None,
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    None
 }
 
 fn render_review(limit: usize) -> String {
@@ -1598,6 +1698,26 @@ mod tests {
     }
 
     #[test]
+    fn search_command_template_supports_quoted_args_without_shell() {
+        let args = search_command_args(
+            "fixture-search --label \"market source\" --json '{\"evidence\":\"{query}\",\"publisher\":\"unit\"}'",
+            "달러 강세",
+        )
+        .expect("quoted template should parse");
+        assert_eq!(
+            args,
+            vec![
+                "fixture-search",
+                "--label",
+                "market source",
+                "--json",
+                "{\"evidence\":\"달러 강세\",\"publisher\":\"unit\"}"
+            ]
+        );
+        assert!(search_command_args("fixture-search \"unterminated {query}", "질문").is_err());
+    }
+
+    #[test]
     fn search_jsonl_parses_sources_and_caps_rows() {
         let mut lines = Vec::new();
         for idx in 0..25 {
@@ -1622,6 +1742,19 @@ mod tests {
         assert_eq!(sources.len(), 1);
         assert_eq!(invalid, 1);
         assert_eq!(sources[0].evidence, "Useful evidence");
+    }
+
+    #[test]
+    fn search_jsonl_decodes_escaped_strings() {
+        let (sources, invalid) = parse_search_jsonl(
+            "{\"title\":\"Quoted \\\"Source\\\"\",\"publisher\":\"fixture\",\"url\":\"fixture://escaped\",\"evidence\":\"line one\\nline two \\\\ backed\",\"relevance\":\"unicode \\u2713\"}",
+            20,
+        );
+        assert_eq!(invalid, 0);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].title, "Quoted \"Source\"");
+        assert_eq!(sources[0].evidence, "line one\nline two \\ backed");
+        assert_eq!(sources[0].relevance, "unicode ✓");
     }
 
     #[test]

@@ -94,9 +94,11 @@ Each output line should be source metadata:
 {"title":"...", "publisher":"...", "url":"...", "evidence":"...", "relevance":"...", "published_at":"..."}
 ```
 
-The hook is deliberately restricted: no shell execution, 5 second timeout, and
-at most 20 JSONL source rows. If the command fails, `mp` falls back to the
-normal inference scaffold instead of crashing.
+The hook is deliberately restricted: no shell execution, quote-aware argv
+parsing, `{query}` substitution, 5 second timeout, and at most 20 JSONL source
+rows. JSON string escapes such as `\"`, `\n`, and `\u2713` are decoded. If the
+command fails, `mp` falls back to the normal inference scaffold instead of
+crashing.
 
 ### `mp now`
 
