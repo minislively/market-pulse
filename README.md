@@ -131,6 +131,8 @@ Prints a compact market pulse card:
 
 Live quotes are fetched through the Yahoo Finance chart endpoint by shelling out to `curl`. If a quote fails, the card still renders so the learning loop is not blocked.
 
+`mp now` is a session/daily pulse, not a weekly return screen. The timestamp and session label use the local machine clock, while each percentage move is calculated from Yahoo `regularMarketPrice` versus `chartPreviousClose` from `range=5d&interval=1d` — usually the prior regular-session close for that asset. Because assets trade in different time zones, treat the card as a cross-asset snapshot and use `$mp-research` when the exact session calendar matters.
+
 ### `mp think "..."`
 
 Records your market interpretation and returns structured feedback:

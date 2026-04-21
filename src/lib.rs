@@ -20,6 +20,7 @@ struct Asset {
 struct Pulse {
     timestamp: String,
     session: String,
+    basis: Vec<String>,
     mood: String,
     assets: Vec<Asset>,
     drivers: Vec<String>,
@@ -163,6 +164,12 @@ enum CommandKind {
     Inquiry { text: String, no_save: bool },
     Research { text: String, no_save: bool },
 }
+
+const PULSE_QUOTE_BASIS: &[&str] = &[
+    "time: local machine timestamp and session label",
+    "change: latest Yahoo regularMarketPrice vs chartPreviousClose, usually the prior regular-session close",
+    "window: Yahoo chart range=5d interval=1d; this is a session/daily pulse, not a weekly return",
+];
 
 const SYMBOLS: &[(&str, &str, &str)] = &[
     ("^GSPC", "S&P 500", ""),
@@ -530,6 +537,7 @@ fn build_pulse() -> Pulse {
     Pulse {
         timestamp: timestamp(),
         session: session(),
+        basis: PULSE_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
         mood,
         assets,
         drivers,
@@ -1082,9 +1090,13 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
         );
     }
     let mut out = format!(
-        "Market Pulse · {} · {}\n\nMood\n  {}\n\nAssets\n",
+        "Market Pulse · {} · {}\n\nMood\n  {}\n\nBasis\n",
         p.timestamp, p.session, p.mood
     );
+    for b in &p.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str("\nAssets\n");
     for a in &p.assets {
         let value = a
             .value
@@ -1467,7 +1479,15 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
 }
 
 fn pulse_json(p: &Pulse) -> String {
-    format!("{{\"type\":\"pulse\",\"timestamp\":\"{}\",\"session\":\"{}\",\"mood\":\"{}\",\"question\":\"{}\",\"concept\":\"{}\"}}", esc(&p.timestamp), esc(&p.session), esc(&p.mood), esc(&p.question), esc(&p.concept))
+    format!(
+        "{{\"type\":\"pulse\",\"timestamp\":\"{}\",\"session\":\"{}\",\"basis\":\"{}\",\"mood\":\"{}\",\"question\":\"{}\",\"concept\":\"{}\"}}",
+        esc(&p.timestamp),
+        esc(&p.session),
+        esc(&p.basis.join(" | ")),
+        esc(&p.mood),
+        esc(&p.question),
+        esc(&p.concept)
+    )
 }
 
 fn thought_json(text: &str, linked: Option<&str>) -> String {
@@ -1893,7 +1913,10 @@ mod tests {
         assert!(p.tensions.iter().any(|t| t.contains("rates")));
         assert!(!p.question.is_empty());
         assert!(!question_seeds_for(&p).is_empty());
-        assert!(render_pulse(&p, false).contains("Market puzzle / question seeds"));
+        let rendered = render_pulse(&p, false);
+        assert!(rendered.contains("Market puzzle / question seeds"));
+        assert!(rendered.contains("Basis"));
+        assert!(rendered.contains("not a weekly return"));
     }
 
     fn compose_test_pulse(assets: Vec<Asset>) -> Pulse {
@@ -1909,6 +1932,7 @@ mod tests {
         Pulse {
             timestamp: timestamp(),
             session: session(),
+            basis: PULSE_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
             question: infer_question(&tensions, &mood),
             concept: infer_concept(&tensions, &drivers),
             mood,

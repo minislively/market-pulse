@@ -40,7 +40,8 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Prints a compact market card.
-- Includes mood, assets, drivers, tensions, question seeds / market puzzle prompts, and concept.
+- Includes mood, explicit quote/change basis, assets, drivers, tensions, question seeds / market puzzle prompts, and concept.
+- Uses a session/daily basis by default: local timestamp/session label plus latest Yahoo `regularMarketPrice` vs `chartPreviousClose` from `range=5d&interval=1d`; this is not a weekly return view.
 - Saves a `pulse` journal event unless `--no-save` is passed.
 - Does not block the loop if live quote fetch fails.
 
