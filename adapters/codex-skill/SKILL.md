@@ -1,7 +1,7 @@
 ---
 name: mp
-description: "Run market-pulse CLI commands for terminal-native market inquiry, research-backed inquiry scaffolds, market context, weekly learning, user-thought feedback, and review. Use when the user says $mp, mp <question>, mp ask, mp research, mp now, mp week, mp regime, mp think, mp review, 오늘 시황, 시장 펄스, or asks for market-thinking feedback."
-argument-hint: "[question]|ask [question]|research [question]|now|week|regime|think|review [text]"
+description: "Run market-pulse CLI commands for terminal-native market inquiry, research-backed inquiry scaffolds, market context, weekly learning, calendar windows, user-thought feedback, and review. Use when the user says $mp, mp <question>, mp ask, mp research, mp now, mp week, mp calendar, mp regime, mp think, mp review, 오늘 시황, 시장 펄스, or asks for market-thinking feedback."
+argument-hint: "[question]|ask [question]|research [question]|now|week|calendar|regime|think|review [selector]"
 ---
 
 Use the local `mp` CLI. Keep this skill thin: do not reimplement market-pulse in the prompt.
@@ -14,21 +14,24 @@ Use the local `mp` CLI. Keep this skill thin: do not reimplement market-pulse in
 - `$mp <question> --research` -> run `mp "<question>" --research`
 - `$mp now` -> run `mp now`
 - `$mp week` -> run `mp week`
+- `$mp calendar` -> run `mp calendar`
 - `$mp regime` -> run `mp regime`
 - `$mp think <text>` -> run `mp think "<text>"`
 - `$mp review` -> run `mp review`
 - `$mp review --date YYYY-MM-DD` -> run `mp review --date YYYY-MM-DD`
 - `$mp review --days N` -> run `mp review --days N`
+- `$mp review --today|--yesterday|--this-week|--last-week` -> run the same `mp review` selector
 
 Readable alias skills are also available when installed from `adapters/codex-skill/aliases/`:
 
 - `$mp-now` -> run `mp now`
 - `$mp-week` -> run `mp week`
+- `$mp-calendar` -> run `mp calendar`
 - `$mp-regime` -> run `mp regime`
 - `$mp-ask <question>` -> run `mp ask "<question>"`
 - `$mp-research <question>` -> run `mp research "<question>"`
 - `$mp-think <text>` -> run `mp think "<text>"`
-- `$mp-review` -> run `mp review`, `mp review --date YYYY-MM-DD`, or `mp review --days N` when a date selector is supplied
+- `$mp-review` -> run `mp review`, `mp review --date YYYY-MM-DD`, `mp review --days N`, or a small period selector such as `mp review --this-week` when supplied
 
 If the user invokes `$mp` without arguments, treat it as `$mp now`.
 

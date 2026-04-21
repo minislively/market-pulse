@@ -29,6 +29,7 @@ Initial code may keep these simple, but the boundaries should stay visible:
 - inquiry hooks: question breakdown, possible explanations, evidence checks, counter-view, next better question
 - research inquiry hooks: source metadata, source-backed claims, no-source fallback, data-to-check prompts
 - weekly hooks: current-local-week market story, current-week journal summary, next-week check questions
+- calendar hooks: local-date windows for today/yesterday/this-week/last-week and explicit review shortcuts
 - feedback hooks: claim extraction, thesis typing, evidence checks, counter-view, next question, concept linking
 - renderer hooks: terminal, compact, markdown, JSON
 - memory hooks: JSONL first, SQLite later if needed
@@ -39,8 +40,8 @@ Adapters should call the standalone `mp` CLI instead of making the core depend o
 
 Planned or current adapters:
 
-- Codex skill: `$mp <question>`, `$mp ask ...`, `$mp research ...`, `$mp now`, `$mp week`, `$mp regime`, `$mp think ...`, `$mp review`
-- Claude Code slash command: `/mp <question>`, `/mp ask ...`, `/mp research ...`, `/mp now`, `/mp week`, `/mp regime`, `/mp think ...`, `/mp review`
+- Codex skill: `$mp <question>`, `$mp ask ...`, `$mp research ...`, `$mp now`, `$mp week`, `$mp calendar`, `$mp regime`, `$mp think ...`, `$mp review`
+- Claude Code slash command: `/mp <question>`, `/mp ask ...`, `/mp research ...`, `/mp now`, `/mp week`, `/mp calendar`, `/mp regime`, `/mp think ...`, `/mp review`
 - OMX hook: optional compact pulse at session start or long task completion
 - tmux popup/status: optional compact pulse
 - cron/launchd: optional scheduled snapshots

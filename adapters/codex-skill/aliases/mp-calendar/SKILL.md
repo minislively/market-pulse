@@ -1,27 +1,21 @@
 ---
-name: mp-review
-description: "Run market-pulse review mode for recent or date-windowed market inquiry/thought review. Use when the user says $mp-review."
-argument-hint: "[--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]"
+name: mp-calendar
+description: "Run market-pulse calendar mode for local date windows and review shortcuts. Use when the user says $mp-calendar or wants to inspect today/yesterday/this-week/last-week review windows."
+argument-hint: ""
 ---
 
 Use the local `mp` CLI. Keep this alias thin: do not reimplement market-pulse in the prompt.
 
 ## Command
 
-- `$mp-review` -> run `mp review`
-- `$mp-review --date YYYY-MM-DD` -> run `mp review --date YYYY-MM-DD`
-- `$mp-review --days N` -> run `mp review --days N`
-- `$mp-review --today|--yesterday|--this-week|--last-week` -> run the same `mp review` selector
+- `$mp-calendar` -> run `mp calendar`
 
-This alias takes no required argument. It reviews recent saved market-pulse entries, or a specific journal date when `--date YYYY-MM-DD`, `--days N`, `--ago N`, `--days-ago N`, `--today`, `--yesterday`, `--this-week`, or `--last-week` is supplied. Prefer `--days N` for relative-day examples and `--this-week` for weekly review examples.
+This alias takes no required argument. It prints local-date windows and the matching `mp review` shortcut commands. If extra market text is provided, prefer `$mp-ask` or `$mp-research` instead of guessing.
 
 ## Example CLI call
 
 ```bash
-mp review
-mp review --date 2026-04-21
-mp review --days 1
-mp review --this-week
+mp calendar
 ```
 
 ## Safety / Product Boundary
@@ -40,6 +34,7 @@ SOURCE: Keep this block textually consistent with `/Users/veluga/.codex/skills/m
 - Do not auto-capture arbitrary market/economy sentences; only run this alias when explicitly invoked.
 - Do not make live/API search automatic. Research/source lookup remains explicit through `$mp-research` or existing `mp ... --research` flows.
 - Do not add trading advice or portfolio guidance.
+- Do not treat local date windows as exchange-holiday calendars, trading signals, or market session proof.
 
 ## Fallback
 

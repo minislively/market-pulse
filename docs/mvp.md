@@ -56,6 +56,15 @@ Acceptance criteria:
 - Saves a `week` journal event unless `--no-save` is passed.
 - Avoids trading advice.
 
+### `mp calendar`
+
+Acceptance criteria:
+
+- Prints local-date windows for `today`, `yesterday`, `this-week`, and `last-week`.
+- Shows the matching `mp review` shortcut commands.
+- Names the boundary that these windows are local-date helpers, not exchange-holiday calendars or trading signals.
+- Does not save a journal event.
+
 ### `mp regime`
 
 Acceptance criteria:
@@ -82,8 +91,10 @@ Acceptance criteria:
 - Reads recent JSONL journal events.
 - Supports `--date YYYY-MM-DD` to filter by the timestamp date stored in journal entries.
 - Supports preferred `--days N` plus compatibility `--ago N` / `--days-ago N` for common relative-day lookup without broad natural-language parsing.
-- Applies `--limit N` after date matching when combined with `--date` or `--days`, keeping the most recent matching entries.
-- Shows a distinct empty-date message when no entries match the requested date.
+- Supports small calendar aliases: `--today`, `--yesterday`, `--this-week`, and `--last-week`.
+- Rejects multiple date/window selectors in the same review command.
+- Applies `--limit N` after date/window matching when combined with a selector, keeping the most recent matching entries.
+- Shows a distinct empty-date or empty-period message when no entries match the requested selector.
 - Surfaces repeated themes, concepts, inquiry counts, and question/thesis habits.
 - Suggests one reasoning drill.
 

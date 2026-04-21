@@ -26,11 +26,13 @@ Then in Claude Code:
 /mp research 금리 하락이 성장주에 좋은 신호임?
 /mp now
 /mp week
+/mp calendar
 /mp regime
 /mp think 금리가 부담인데도 반도체가 버티는 것 같다
 /mp review
 /mp review --date 2026-04-21
 /mp review --days 1
+/mp review --this-week
 ```
 
 ## Contract

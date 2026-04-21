@@ -22,7 +22,7 @@ cp adapters/codex-skill/SKILL.md ~/.codex/skills/mp/SKILL.md
 Install the readable alias skills:
 
 ```bash
-for name in mp-now mp-week mp-regime mp-ask mp-research mp-think mp-review; do
+for name in mp-now mp-week mp-calendar mp-regime mp-ask mp-research mp-think mp-review; do
   mkdir -p "$HOME/.codex/skills/$name"
   cp "adapters/codex-skill/aliases/$name/SKILL.md" "$HOME/.codex/skills/$name/SKILL.md"
 done
@@ -37,6 +37,7 @@ names to appear in the session skill list.
 $mp "금리가 내려간 게 진짜 완화 기대 때문임?"
 $mp now
 $mp week
+$mp calendar
 $mp regime
 $mp ask "대형 IPO 때문에 성장주가 강한 걸까?"
 $mp research "금리 하락이 성장주에 좋은 신호임?"
@@ -44,9 +45,11 @@ $mp think "금리가 부담인데도 반도체가 버티는 것 같다"
 $mp review
 $mp review --date 2026-04-21
 $mp review --days 1
+$mp review --this-week
 
 $mp-now
 $mp-week
+$mp-calendar
 $mp-regime
 $mp-ask "대형 IPO 때문에 성장주가 강한 걸까?"
 $mp-research "금리 하락이 성장주에 좋은 신호임?"
@@ -54,6 +57,7 @@ $mp-think "금리가 부담인데도 반도체가 버티는 것 같다"
 $mp-review
 $mp-review --date 2026-04-21
 $mp-review --days 1
+$mp-review --this-week
 ```
 
 ## Contract

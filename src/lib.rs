@@ -184,6 +184,7 @@ struct Feedback {
 enum CommandKind {
     Now,
     Week,
+    Calendar,
     Regime,
     Think,
     Review,
@@ -227,6 +228,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     match parse_command(&args)? {
         CommandKind::Now => now(&args),
         CommandKind::Week => week(&args),
+        CommandKind::Calendar => calendar(&args),
         CommandKind::Regime => regime(&args),
         CommandKind::Think => think(&args),
         CommandKind::Review => review(&args),
@@ -244,6 +246,7 @@ fn parse_command(args: &[String]) -> Result<CommandKind, String> {
         None => Ok(CommandKind::Now),
         Some("now") => Ok(CommandKind::Now),
         Some("week") | Some("weekly") => Ok(CommandKind::Week),
+        Some("calendar") | Some("cal") => Ok(CommandKind::Calendar),
         Some("regime") => Ok(CommandKind::Regime),
         Some("think") => Ok(CommandKind::Think),
         Some("review") => Ok(CommandKind::Review),
@@ -290,7 +293,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp week [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]"
     );
 }
 
@@ -323,6 +326,11 @@ fn regime(args: &[String]) -> Result<(), String> {
         append_event(&regime_json(&regime))?;
     }
     println!("{}", render_regime(&regime));
+    Ok(())
+}
+
+fn calendar(_args: &[String]) -> Result<(), String> {
+    println!("{}", render_calendar());
     Ok(())
 }
 
@@ -538,9 +546,15 @@ fn research_source_from_json_line(line: &str) -> Option<ResearchSource> {
     })
 }
 
+#[derive(Clone, Debug)]
+enum ReviewFilter {
+    Date(String),
+    Dates { label: String, dates: Vec<String> },
+}
+
 fn review(args: &[String]) -> Result<(), String> {
     let mut limit = 80usize;
-    let mut date: Option<String> = None;
+    let mut filter: Option<ReviewFilter> = None;
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--limit" {
@@ -555,31 +569,60 @@ fn review(args: &[String]) -> Result<(), String> {
                 return Err("--date needs YYYY-MM-DD".into());
             };
             validate_review_date(raw)?;
-            if date.is_some() {
-                return Err("use only one review date selector".into());
-            }
-            date = Some(raw.clone());
+            set_review_filter(&mut filter, ReviewFilter::Date(raw.clone()))?;
             i += 1;
         } else if matches!(args[i].as_str(), "--days" | "--ago" | "--days-ago") {
             let Some(raw) = args.get(i + 1) else {
                 return Err(format!("{} needs a number of days", args[i]));
             };
-            if date.is_some() {
-                return Err("use only one review date selector".into());
-            }
             let days = parse_review_days_ago(raw)?;
-            date = Some(date_for_days_ago(days)?);
+            set_review_filter(&mut filter, ReviewFilter::Date(date_for_days_ago(days)?))?;
             i += 1;
+        } else if matches!(
+            args[i].as_str(),
+            "--today" | "--yesterday" | "--this-week" | "--last-week"
+        ) {
+            set_review_filter(&mut filter, review_filter_for_alias(&args[i])?)?;
         }
         i += 1;
     }
-    let rendered = if let Some(date) = date {
-        render_review_for_date(limit, &date)
+    let rendered = if let Some(filter) = filter {
+        render_review_for_filter(limit, &filter)
     } else {
         render_review(limit)
     };
     println!("{rendered}");
     Ok(())
+}
+
+fn set_review_filter(filter: &mut Option<ReviewFilter>, next: ReviewFilter) -> Result<(), String> {
+    if filter.is_some() {
+        return Err("use only one review date selector".into());
+    }
+    *filter = Some(next);
+    Ok(())
+}
+
+fn review_filter_for_alias(alias: &str) -> Result<ReviewFilter, String> {
+    match alias {
+        "--today" => Ok(ReviewFilter::Date(date_for_days_ago(0)?)),
+        "--yesterday" => Ok(ReviewFilter::Date(date_for_days_ago(1)?)),
+        "--this-week" => {
+            let dates = current_week_date_prefixes();
+            Ok(ReviewFilter::Dates {
+                label: format!("this-week {}", week_window_label(&dates)),
+                dates,
+            })
+        }
+        "--last-week" => {
+            let dates = last_week_date_prefixes();
+            Ok(ReviewFilter::Dates {
+                label: format!("last-week {}", week_window_label(&dates)),
+                dates,
+            })
+        }
+        _ => Err(format!("unknown review period alias '{alias}'")),
+    }
 }
 
 fn parse_review_days_ago(raw: &str) -> Result<u32, String> {
@@ -612,6 +655,21 @@ fn current_week_date_prefixes() -> Vec<String> {
         return date_prefixes_for_days(7);
     };
     let mut dates = (0..weekday)
+        .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+        .collect::<Vec<_>>();
+    dates.reverse();
+    dates
+}
+
+fn last_week_date_prefixes() -> Vec<String> {
+    let Some(weekday) = iso_weekday() else {
+        let mut dates = (7..14)
+            .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+            .collect::<Vec<_>>();
+        dates.reverse();
+        return dates;
+    };
+    let mut dates = (weekday..weekday + 7)
         .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
         .collect::<Vec<_>>();
     dates.reverse();
@@ -2073,6 +2131,37 @@ fn render_feedback(f: &Feedback) -> String {
     out
 }
 
+fn render_calendar() -> String {
+    let today = date_for_days_ago(0).unwrap_or_else(|_| "unavailable".into());
+    let yesterday = date_for_days_ago(1).unwrap_or_else(|_| "unavailable".into());
+    let this_week = current_week_date_prefixes();
+    let last_week = last_week_date_prefixes();
+    let mut out = format!(
+        "Market Pulse Calendar · {}\n\nLocal date windows\n",
+        timestamp()
+    );
+    out.push_str(&format!("  - today: {today}\n"));
+    out.push_str(&format!("  - yesterday: {yesterday}\n"));
+    out.push_str(&format!(
+        "  - this-week: {}\n",
+        week_window_label(&this_week)
+    ));
+    out.push_str(&format!(
+        "  - last-week: {}\n",
+        week_window_label(&last_week)
+    ));
+    out.push_str(
+        "\nReview shortcuts\n  - mp review --today\n  - mp review --yesterday\n  - mp review --this-week\n  - mp review --last-week\n",
+    );
+    out.push_str(
+        "\nHow market-pulse uses these windows\n  - mp week uses the current local calendar week for journal review.\n  - mp week prices the market window from the first Yahoo close matching the current local week when available.\n  - mp review period aliases filter journal timestamp dates; they are not fuzzy full-text search.\n",
+    );
+    out.push_str(
+        "\nBoundary\n  Calendar windows are local-date helpers for market literacy, not exchange-holiday calendars or trading signals.\n",
+    );
+    out
+}
+
 fn journal_path() -> PathBuf {
     if let Ok(home) = env::var("MARKET_PULSE_HOME") {
         return PathBuf::from(home).join("journal.jsonl");
@@ -2132,6 +2221,13 @@ fn read_events_for_date(limit: usize, date: &str) -> Vec<String> {
         return Vec::new();
     };
     filter_events_by_date(read_event_lines(&text), date, limit)
+}
+
+fn read_events_for_dates(limit: usize, dates: &[String]) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(journal_path()) else {
+        return Vec::new();
+    };
+    filter_events_by_dates(read_event_lines(&text), dates, limit)
 }
 
 fn filter_events_by_date(events: Vec<String>, date: &str, limit: usize) -> Vec<String> {
@@ -2220,9 +2316,21 @@ fn render_review(limit: usize) -> String {
     render_review_from_events(&events, &journal_path().display().to_string())
 }
 
+fn render_review_for_filter(limit: usize, filter: &ReviewFilter) -> String {
+    match filter {
+        ReviewFilter::Date(date) => render_review_for_date(limit, date),
+        ReviewFilter::Dates { label, dates } => render_review_for_dates(limit, label, dates),
+    }
+}
+
 fn render_review_for_date(limit: usize, date: &str) -> String {
     let events = read_events_for_date(limit, date);
     render_review_for_date_from_events(&events, &journal_path().display().to_string(), date)
+}
+
+fn render_review_for_dates(limit: usize, label: &str, dates: &[String]) -> String {
+    let events = read_events_for_dates(limit, dates);
+    render_review_for_dates_from_events(&events, &journal_path().display().to_string(), label)
 }
 
 fn render_review_for_date_from_events(events: &[String], journal: &str, date: &str) -> String {
@@ -2232,6 +2340,17 @@ fn render_review_for_date_from_events(events: &[String], journal: &str, date: &s
         );
     }
     let mut out = format!("Review date filter: {date}\n\n");
+    out.push_str(&render_review_from_events(events, journal));
+    out
+}
+
+fn render_review_for_dates_from_events(events: &[String], journal: &str, label: &str) -> String {
+    if events.is_empty() {
+        return format!(
+            "No market-pulse journal entries found for {label}.\n\nJournal: {journal}\nTry `mp calendar` to inspect available date windows, or record one with `mp now`, `mp week`, `mp ask`, or `mp think`."
+        );
+    }
+    let mut out = format!("Review period filter: {label}\n\n");
     out.push_str(&render_review_from_events(events, journal));
     out
 }
@@ -2506,6 +2625,18 @@ mod tests {
         assert_eq!(
             parse_command(&["weekly".into(), "--no-save".into()]).unwrap(),
             CommandKind::Week
+        );
+    }
+
+    #[test]
+    fn routes_calendar_to_calendar_command() {
+        assert_eq!(
+            parse_command(&["calendar".into()]).unwrap(),
+            CommandKind::Calendar
+        );
+        assert_eq!(
+            parse_command(&["cal".into()]).unwrap(),
+            CommandKind::Calendar
         );
     }
 
@@ -2834,6 +2965,51 @@ mod tests {
         assert!(filtered[0].contains("10:00:00"));
         assert!(filtered[1].contains("\"type\":\"week\""));
         assert!(filtered[2].contains("11:00:00"));
+    }
+
+    #[test]
+    fn review_period_filter_renders_label_and_matching_dates() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-19T09:00:00+0900\",\"text\":\"유가\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"금리\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"달러와 코스피?\",\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
+        ];
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let filtered = filter_events_by_dates(events, &dates, 10);
+        let out = render_review_for_dates_from_events(
+            &filtered,
+            "/tmp/journal.jsonl",
+            "this-week 2026-04-20..2026-04-21",
+        );
+        assert!(out.contains("Review period filter: this-week 2026-04-20..2026-04-21"));
+        assert!(out.contains("Entries scanned: 2"));
+        assert!(out.contains("rates"));
+        assert!(out.contains("fx"));
+        assert!(!out.contains("oil"));
+    }
+
+    #[test]
+    fn review_rejects_multiple_period_selectors() {
+        assert!(review(&["review".into(), "--today".into(), "--this-week".into()]).is_err());
+        assert!(review(&[
+            "review".into(),
+            "--date".into(),
+            "2026-04-21".into(),
+            "--last-week".into(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn calendar_renders_review_shortcuts_and_boundary() {
+        let out = render_calendar();
+        assert!(out.contains("Market Pulse Calendar"));
+        assert!(out.contains("today:"));
+        assert!(out.contains("this-week:"));
+        assert!(out.contains("last-week:"));
+        assert!(out.contains("mp review --this-week"));
+        assert!(out.contains("not fuzzy full-text search"));
+        assert!(out.contains("not exchange-holiday calendars"));
     }
 
     #[test]
