@@ -28,7 +28,7 @@ Initial code may keep these simple, but the boundaries should stay visible:
 - lens hooks: risk-on/off, rates vs growth, dollar liquidity, Korea market, AI/semis, IPO/event, positioning/flow
 - inquiry hooks: question breakdown, possible explanations, evidence checks, counter-view, next better question
 - research inquiry hooks: source metadata, source-backed claims, no-source fallback, data-to-check prompts
-- weekly hooks: rolling 1W market story, 7-local-day journal summary, next-week check questions
+- weekly hooks: current-local-week market story, current-week journal summary, next-week check questions
 - feedback hooks: claim extraction, thesis typing, evidence checks, counter-view, next question, concept linking
 - renderer hooks: terminal, compact, markdown, JSON
 - memory hooks: JSONL first, SQLite later if needed

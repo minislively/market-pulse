@@ -155,7 +155,7 @@ Prints a broader 1-3 month market regime card:
 
 Prints a hybrid weekly market-and-learning card:
 
-- rolling weekly market story
+- current-week market story
 - explicit market and journal basis
 - 1W cross-asset map
 - weekly market themes and tensions
@@ -163,7 +163,7 @@ Prints a hybrid weekly market-and-learning card:
 - recurring journal themes and thesis habits
 - next-week check questions
 
-`mp week` fills the gap between `mp now` and `mp regime`: it is not a separate daily command and not a 1-3 month regime read. The market window uses Yahoo `range=5d&interval=1d` versus the first available close, while the journal window scans the last 7 local dates before saving the weekly card.
+`mp week` fills the gap between `mp now` and `mp regime`: it is not a separate daily command and not a 1-3 month regime read. The default window is current-date based: the journal review uses the current local calendar week, while the market change uses Yahoo `range=1mo&interval=1d` to find the first close matching the current local week before comparing it with the latest `regularMarketPrice`. If an asset has not traded during the current local week yet, the weekly card falls back to the latest available close instead of pretending a week-to-date move exists.
 
 ### `mp think "..."`
 

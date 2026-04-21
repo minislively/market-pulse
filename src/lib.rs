@@ -198,12 +198,6 @@ const PULSE_QUOTE_BASIS: &[&str] = &[
     "window: Yahoo chart range=5d interval=1d; this is a session/daily pulse, not a weekly return",
 ];
 
-const WEEK_QUOTE_BASIS: &[&str] = &[
-    "time: local machine timestamp; weekly is a learning loop, not a trading signal",
-    "market window: Yahoo chart range=5d interval=1d, latest regularMarketPrice vs first available close",
-    "journal window: last 7 local dates from market-pulse JSONL, filtered before the weekly card is saved",
-];
-
 const REGIME_QUOTE_BASIS: &[&str] = &[
     "time: local machine timestamp; regime is broader than today's pulse",
     "change: latest Yahoo regularMarketPrice vs first available close in the chart window",
@@ -613,14 +607,60 @@ fn date_for_days_ago(days: u32) -> Result<String, String> {
         .ok_or_else(|| "--days needs BSD `date -v` or GNU `date -d` support".into())
 }
 
+fn current_week_date_prefixes() -> Vec<String> {
+    let Some(weekday) = iso_weekday() else {
+        return date_prefixes_for_days(7);
+    };
+    let mut dates = (0..weekday)
+        .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+        .collect::<Vec<_>>();
+    dates.reverse();
+    dates
+}
+
+fn iso_weekday() -> Option<u32> {
+    command_date_raw(&["+%u"])
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|day| (1..=7).contains(day))
+}
+
+fn week_basis(dates: &[String]) -> Vec<String> {
+    let window = week_window_label(dates);
+    vec![
+        format!("time: local machine timestamp; current-week window {window}; weekly is a learning loop, not a trading signal"),
+        "market window: Yahoo chart range=1mo interval=1d; change is latest regularMarketPrice vs first close matching the current local week, falling back to the latest available close if the asset has not traded this week".into(),
+        format!("journal window: current local calendar week {window}, filtered before the weekly card is saved"),
+    ]
+}
+
+fn week_window_label(dates: &[String]) -> String {
+    match (dates.first(), dates.last()) {
+        (Some(first), Some(last)) if first == last => first.clone(),
+        (Some(first), Some(last)) => format!("{first}..{last}"),
+        _ => "unavailable".into(),
+    }
+}
+
+fn date_for_unix_timestamp(seconds: i64) -> Option<String> {
+    let raw = seconds.to_string();
+    command_date(&["-r", &raw, "+%Y-%m-%d"]).or_else(|| {
+        let gnu_timestamp = format!("@{raw}");
+        command_date(&["-d", &gnu_timestamp, "+%Y-%m-%d"])
+    })
+}
+
 fn command_date(args: &[&str]) -> Option<String> {
+    let date = command_date_raw(args)?;
+    validate_review_date(&date).ok()?;
+    Some(date)
+}
+
+fn command_date_raw(args: &[&str]) -> Option<String> {
     let output = Command::new("date").args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
-    let date = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    validate_review_date(&date).ok()?;
-    Some(date)
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
 }
 
 fn validate_review_date(date: &str) -> Result<(), String> {
@@ -697,8 +737,16 @@ fn build_pulse() -> Pulse {
 fn build_week() -> Weekly {
     let mut assets = Vec::new();
     let mut failures = 0;
+    let week_dates = current_week_date_prefixes();
     for (symbol, label, unit) in SYMBOLS {
-        match fetch_asset_window(symbol, label, unit, "5d", "1d", WindowChange::FirstClose) {
+        match fetch_asset_window(
+            symbol,
+            label,
+            unit,
+            "1mo",
+            "1d",
+            WindowChange::FirstMatchingDate(week_dates.clone()),
+        ) {
             Ok(asset) => assets.push(asset),
             Err(_) => {
                 failures += 1;
@@ -715,7 +763,7 @@ fn build_week() -> Weekly {
     }
     let mut notes = vec![
         "weekly market window uses Yahoo Finance chart endpoint via curl".to_string(),
-        "weekly journal window is a rolling 7 local-date learning review".to_string(),
+        "weekly journal window uses the current local calendar week".to_string(),
     ];
     if failures > 0 {
         notes.push(format!(
@@ -735,7 +783,7 @@ fn build_week() -> Weekly {
     let questions = infer_week_questions(&assets, &label, &tensions);
     Weekly {
         timestamp: timestamp(),
-        basis: WEEK_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
+        basis: week_basis(&week_dates),
         label,
         assets,
         drivers,
@@ -801,10 +849,11 @@ fn build_regime() -> Regime {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum WindowChange {
     PreviousClose,
     FirstClose,
+    FirstMatchingDate(Vec<String>),
 }
 
 fn fetch_asset(
@@ -849,6 +898,9 @@ fn fetch_asset_window(
         WindowChange::PreviousClose => number_after(&body, "\"chartPreviousClose\":")
             .or_else(|| closes.get(closes.len().saturating_sub(2)).copied()),
         WindowChange::FirstClose => closes.first().copied(),
+        WindowChange::FirstMatchingDate(dates) => first_close_for_dates(&body, &dates)
+            .or_else(|| number_after(&body, "\"chartPreviousClose\":"))
+            .or_else(|| closes.last().copied()),
     };
     let change = match (value, previous) {
         (Some(v), Some(p)) if p != 0.0 => Some(((v - p) / p) * 100.0),
@@ -892,6 +944,34 @@ fn close_values(text: &str) -> Vec<f64> {
         .split(',')
         .filter_map(|v| v.parse().ok())
         .collect()
+}
+
+fn timestamp_values(text: &str) -> Vec<i64> {
+    let Some(start_key) = text.find("\"timestamp\":[") else {
+        return vec![];
+    };
+    let start = start_key + "\"timestamp\":[".len();
+    let Some(end) = text[start..].find(']') else {
+        return vec![];
+    };
+    text[start..start + end]
+        .split(',')
+        .filter_map(|v| v.parse().ok())
+        .collect()
+}
+
+fn first_close_for_dates(text: &str, dates: &[String]) -> Option<f64> {
+    if dates.is_empty() {
+        return None;
+    }
+    timestamp_values(text)
+        .into_iter()
+        .zip(close_values(text))
+        .find_map(|(ts, close)| {
+            date_for_unix_timestamp(ts)
+                .filter(|date| dates.iter().any(|d| d == date))
+                .map(|_| close)
+        })
 }
 
 fn avg_change(assets: &[Asset], symbols: &[&str]) -> Option<f64> {
@@ -2026,7 +2106,7 @@ fn read_week_events(limit: usize) -> Vec<String> {
         return Vec::new();
     };
     let events = read_event_lines(&text);
-    let dates = date_prefixes_for_days(7);
+    let dates = current_week_date_prefixes();
     if dates.is_empty() {
         return limit_events(events, limit);
     }
@@ -2745,13 +2825,34 @@ mod tests {
         let events = vec![
             "{\"type\":\"thought\",\"timestamp\":\"2026-04-19T09:00:00+0900\",\"text\":\"유가\",\"linked_pulse_timestamp\":null}".into(),
             "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"금리\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"week\",\"timestamp\":\"2026-04-20T11:00:00+0900\",\"label\":\"mixed\"}".into(),
             "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"text\":\"달러\",\"linked_pulse_timestamp\":null}".into(),
         ];
         let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
         let filtered = filter_events_by_dates(events, &dates, 10);
-        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered.len(), 3);
         assert!(filtered[0].contains("10:00:00"));
-        assert!(filtered[1].contains("11:00:00"));
+        assert!(filtered[1].contains("\"type\":\"week\""));
+        assert!(filtered[2].contains("11:00:00"));
+    }
+
+    #[test]
+    fn week_basis_names_current_calendar_window() {
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let basis = week_basis(&dates);
+        assert!(basis[0].contains("current-week window 2026-04-20..2026-04-21"));
+        assert!(basis[1].contains("range=1mo interval=1d"));
+        assert!(basis[2].contains("current local calendar week"));
+    }
+
+    #[test]
+    fn first_close_for_dates_uses_matching_timestamp_date() {
+        let body =
+            "{\"timestamp\":[1776643200,1776729600],\"indicators\":{\"quote\":[{\"close\":[100.0,110.0]}]}}";
+        assert_eq!(
+            first_close_for_dates(body, &["2026-04-21".into()]).unwrap(),
+            110.0
+        );
     }
 
     #[test]
@@ -2971,7 +3072,7 @@ mod tests {
         let tensions = infer_week_tensions(&assets, &label);
         Weekly {
             timestamp: timestamp(),
-            basis: WEEK_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
+            basis: week_basis(&["2026-04-20".into(), "2026-04-21".into()]),
             questions: infer_week_questions(&assets, &label, &tensions),
             label,
             assets,

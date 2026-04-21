@@ -10,7 +10,7 @@ Use the local `mp` CLI. Keep this alias thin: do not reimplement market-pulse in
 
 - `$mp-week` -> run `mp week`
 
-This alias takes no required argument. It prints a weekly learning card that combines a rolling weekly market view, this week's saved market-pulse journal themes, and next-week check questions. If extra text is provided, prefer `$mp-ask` or `$mp-research` instead of guessing.
+This alias takes no required argument. It prints a weekly learning card that combines a current-local-week market view, this week's saved market-pulse journal themes, and next-week check questions. If extra text is provided, prefer `$mp-ask` or `$mp-research` instead of guessing.
 
 ## Example CLI call
 
