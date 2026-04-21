@@ -275,7 +275,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--ago N]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N]"
     );
 }
 
@@ -534,7 +534,7 @@ fn review(args: &[String]) -> Result<(), String> {
             }
             date = Some(raw.clone());
             i += 1;
-        } else if args[i] == "--ago" || args[i] == "--days-ago" {
+        } else if matches!(args[i].as_str(), "--days" | "--ago" | "--days-ago") {
             let Some(raw) = args.get(i + 1) else {
                 return Err(format!("{} needs a number of days", args[i]));
             };
@@ -559,18 +559,18 @@ fn review(args: &[String]) -> Result<(), String> {
 fn parse_review_days_ago(raw: &str) -> Result<u32, String> {
     let days = raw
         .parse::<u32>()
-        .map_err(|_| "--ago must be a non-negative whole number".to_string())?;
+        .map_err(|_| "--days must be a non-negative whole number".to_string())?;
     if days <= 3660 {
         Ok(days)
     } else {
-        Err("--ago must be 3660 days or less".into())
+        Err("--days must be 3660 days or less".into())
     }
 }
 
 fn date_for_days_ago(days: u32) -> Result<String, String> {
     if days == 0 {
         return command_date(&["+%Y-%m-%d"])
-            .ok_or_else(|| "--ago needs the local `date` command".into());
+            .ok_or_else(|| "--days needs the local `date` command".into());
     }
     let bsd_offset = format!("-v-{days}d");
     if let Some(date) = command_date(&[&bsd_offset, "+%Y-%m-%d"]) {
@@ -578,7 +578,7 @@ fn date_for_days_ago(days: u32) -> Result<String, String> {
     }
     let gnu_relative = format!("{days} days ago");
     command_date(&["-d", &gnu_relative, "+%Y-%m-%d"])
-        .ok_or_else(|| "--ago needs BSD `date -v` or GNU `date -d` support".into())
+        .ok_or_else(|| "--days needs BSD `date -v` or GNU `date -d` support".into())
 }
 
 fn command_date(args: &[&str]) -> Option<String> {
@@ -2396,7 +2396,7 @@ mod tests {
             "review".into(),
             "--date".into(),
             "2026-04-21".into(),
-            "--ago".into(),
+            "--days".into(),
             "1".into(),
         ])
         .is_err());

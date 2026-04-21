@@ -14,7 +14,7 @@ mp regime
 mp think "금리가 부담인데도 반도체가 버티는 걸 보면 성장 기대가 아직 남아있는 것 같다"
 mp review
 mp review --date 2026-04-21
-mp review --ago 1
+mp review --days 1
 ```
 
 ## North star
@@ -148,7 +148,7 @@ Prints a broader 1-3 month market regime card:
 - checks for the next session/week
 - next better regime question
 
-`mp regime` is intentionally separate from `mp now`: `now` is a session/daily pulse, while `regime` is the larger backdrop traders compare against short-term moves. Date-based journal lookup is a later phase, likely through `mp review --date YYYY-MM-DD` or a search-style review UX.
+`mp regime` is intentionally separate from `mp now`: `now` is a session/daily pulse, while `regime` is the larger backdrop traders compare against short-term moves. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD` and the easier `mp review --days N`; broader search-style review remains a later phase.
 
 ### `mp think "..."`
 
@@ -166,14 +166,14 @@ Records your market interpretation and returns structured feedback:
 
 Reviews recent pulses, regimes, inquiries, thoughts, and feedback to surface recurring themes, question habits, and reasoning drills.
 
-Use `--date YYYY-MM-DD` to review only entries recorded on a specific timestamp date, or `--ago N` for the common “N days ago” flow:
+Use `--date YYYY-MM-DD` to review only entries recorded on a specific timestamp date, or `--days N` for the common “N days back” flow:
 
 ```bash
 mp review --date 2026-04-21
-mp review --ago 1
+mp review --days 1
 ```
 
-`--limit N` can be combined with `--date`; the limit is applied after date matching, keeping the most recent matching entries. The date filter is explicit by design. Natural language lookup such as `어제` or `지난주` remains a later search/review phase.
+`--limit N` can be combined with `--date` or `--days`; the limit is applied after date matching, keeping the most recent matching entries. `--ago N` and `--days-ago N` remain accepted as compatibility aliases, but `--days N` is the preferred spelling. The date filter is explicit by design. Natural language lookup such as `어제` or `지난주` remains a later search/review phase.
 
 
 ## OMX/Codex aliases
@@ -189,7 +189,7 @@ $mp-research "금리 하락이 성장주에 좋은 신호임?"
 $mp-think "금리가 부담인데도 반도체가 버티는 것 같다"
 $mp-review
 $mp-review --date 2026-04-21
-$mp-review --ago 1
+$mp-review --days 1
 ```
 
 These aliases are thin wrappers around the same local `mp` binary:
@@ -199,7 +199,7 @@ These aliases are thin wrappers around the same local `mp` binary:
 - `$mp-ask` -> `mp ask`
 - `$mp-research` -> `mp research`
 - `$mp-think` -> `mp think`
-- `$mp-review` -> `mp review`, `mp review --date YYYY-MM-DD`, or `mp review --ago N`
+- `$mp-review` -> `mp review`, `mp review --date YYYY-MM-DD`, or `mp review --days N`
 
 The canonical `$mp ...` skill remains available for flexible calls. The aliases
 are explicit only: they do not auto-capture arbitrary market/economy sentences,

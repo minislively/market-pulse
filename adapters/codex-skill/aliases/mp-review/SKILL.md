@@ -1,7 +1,7 @@
 ---
 name: mp-review
 description: "Run market-pulse review mode for recent market inquiry/thought review. Use when the user says $mp-review."
-argument-hint: "[--date YYYY-MM-DD|--ago N]"
+argument-hint: "[--date YYYY-MM-DD|--days N]"
 ---
 
 Use the local `mp` CLI. Keep this alias thin: do not reimplement market-pulse in the prompt.
@@ -10,16 +10,16 @@ Use the local `mp` CLI. Keep this alias thin: do not reimplement market-pulse in
 
 - `$mp-review` -> run `mp review`
 - `$mp-review --date YYYY-MM-DD` -> run `mp review --date YYYY-MM-DD`
-- `$mp-review --ago N` -> run `mp review --ago N`
+- `$mp-review --days N` -> run `mp review --days N`
 
-This alias takes no required argument. It reviews recent saved market-pulse entries, or a specific journal date when `--date YYYY-MM-DD`, `--ago N`, or `--days-ago N` is supplied.
+This alias takes no required argument. It reviews recent saved market-pulse entries, or a specific journal date when `--date YYYY-MM-DD`, `--days N`, `--ago N`, or `--days-ago N` is supplied. Prefer `--days N` in examples and user-facing guidance.
 
 ## Example CLI call
 
 ```bash
 mp review
 mp review --date 2026-04-21
-mp review --ago 1
+mp review --days 1
 ```
 
 ## Safety / Product Boundary
