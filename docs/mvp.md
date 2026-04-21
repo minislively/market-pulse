@@ -45,6 +45,17 @@ Acceptance criteria:
 - Saves a `pulse` journal event unless `--no-save` is passed.
 - Does not block the loop if live quote fetch fails.
 
+### `mp week`
+
+Acceptance criteria:
+
+- Prints a hybrid weekly market-and-learning card distinct from `mp now` and `mp regime`.
+- Uses a rolling weekly market basis by default: local timestamp plus latest Yahoo `regularMarketPrice` vs first available close from `range=5d&interval=1d`.
+- Scans the last 7 local dates of JSONL journal entries before saving the weekly card.
+- Includes weekly story, explicit basis, 1W asset map, weekly market themes, tensions, journal theme counts, thesis habits, next-week check questions, and a weekly drill.
+- Saves a `week` journal event unless `--no-save` is passed.
+- Avoids trading advice.
+
 ### `mp regime`
 
 Acceptance criteria:

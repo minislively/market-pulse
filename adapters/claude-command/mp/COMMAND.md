@@ -1,6 +1,6 @@
 ---
 name: mp
-description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색, 리서치 스캐폴드, 시장 카드, 사용자 해석 피드백, 리뷰를 제공합니다. /mp 질문, /mp ask 질문, /mp research 질문, /mp now, /mp regime, /mp think, /mp review 또는 오늘 시황/시장 펄스/시장 생각 피드백 요청에 사용합니다.
+description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색, 리서치 스캐폴드, 시장 카드, 주간 학습 카드, 사용자 해석 피드백, 리뷰를 제공합니다. /mp 질문, /mp ask 질문, /mp research 질문, /mp now, /mp week, /mp regime, /mp think, /mp review 또는 오늘 시황/시장 펄스/시장 생각 피드백 요청에 사용합니다.
 ---
 
 # market-pulse Claude Command
@@ -14,6 +14,7 @@ description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색
 /mp ask 대형 IPO 때문에 성장주가 강한 걸까?
 /mp research 금리 하락이 성장주에 좋은 신호임?
 /mp now
+/mp week
 /mp regime
 /mp think 금리가 부담인데도 반도체가 버티는 것 같다
 /mp review
@@ -27,6 +28,7 @@ mp review --days 1
 
 1. 사용자의 인자를 파악합니다.
    - 없음 또는 `now`: `mp now` 실행
+   - `week`: `mp week` 실행
    - `regime`: `mp regime` 실행
    - `ask <question>`: `mp ask "<question>"` 실행
    - `research <question>`: `mp research "<question>"` 실행
@@ -78,6 +80,12 @@ mp research "금리 하락이 성장주에 좋은 신호임?"
 
 ```bash
 mp now
+```
+
+### `/mp week`
+
+```bash
+mp week
 ```
 
 ### `/mp regime`

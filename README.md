@@ -10,6 +10,7 @@ mp research "금리 하락이 성장주에 좋은 신호임?"
 mp "대형 IPO 때문에 성장주가 강한 걸까?" --research
 mp ask "대형 IPO 때문에 성장주가 강한 걸까?"
 mp now
+mp week
 mp regime
 mp think "금리가 부담인데도 반도체가 버티는 걸 보면 성장 기대가 아직 남아있는 것 같다"
 mp review
@@ -150,6 +151,20 @@ Prints a broader 1-3 month market regime card:
 
 `mp regime` is intentionally separate from `mp now`: `now` is a session/daily pulse, while `regime` is the larger backdrop traders compare against short-term moves. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD` and the easier `mp review --days N`; broader search-style review remains a later phase.
 
+### `mp week`
+
+Prints a hybrid weekly market-and-learning card:
+
+- rolling weekly market story
+- explicit market and journal basis
+- 1W cross-asset map
+- weekly market themes and tensions
+- this week's saved pulse/regime/inquiry/thought counts
+- recurring journal themes and thesis habits
+- next-week check questions
+
+`mp week` fills the gap between `mp now` and `mp regime`: it is not a separate daily command and not a 1-3 month regime read. The market window uses Yahoo `range=5d&interval=1d` versus the first available close, while the journal window scans the last 7 local dates before saving the weekly card.
+
 ### `mp think "..."`
 
 Records your market interpretation and returns structured feedback:
@@ -183,6 +198,7 @@ aliases inside Codex/OMX sessions without changing the standalone shell CLI:
 
 ```text
 $mp-now
+$mp-week
 $mp-regime
 $mp-ask "대형 IPO 때문에 성장주가 강한 걸까?"
 $mp-research "금리 하락이 성장주에 좋은 신호임?"
@@ -195,6 +211,7 @@ $mp-review --days 1
 These aliases are thin wrappers around the same local `mp` binary:
 
 - `$mp-now` -> `mp now`
+- `$mp-week` -> `mp week`
 - `$mp-regime` -> `mp regime`
 - `$mp-ask` -> `mp ask`
 - `$mp-research` -> `mp research`

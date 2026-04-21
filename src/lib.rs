@@ -44,6 +44,18 @@ struct Regime {
 }
 
 #[derive(Clone, Debug)]
+struct Weekly {
+    timestamp: String,
+    basis: Vec<String>,
+    label: String,
+    assets: Vec<Asset>,
+    drivers: Vec<String>,
+    tensions: Vec<String>,
+    questions: Vec<String>,
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 struct Inquiry {
     timestamp: String,
     question: String,
@@ -171,6 +183,7 @@ struct Feedback {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandKind {
     Now,
+    Week,
     Regime,
     Think,
     Review,
@@ -183,6 +196,12 @@ const PULSE_QUOTE_BASIS: &[&str] = &[
     "time: local machine timestamp and session label",
     "change: latest Yahoo regularMarketPrice vs chartPreviousClose, usually the prior regular-session close",
     "window: Yahoo chart range=5d interval=1d; this is a session/daily pulse, not a weekly return",
+];
+
+const WEEK_QUOTE_BASIS: &[&str] = &[
+    "time: local machine timestamp; weekly is a learning loop, not a trading signal",
+    "market window: Yahoo chart range=5d interval=1d, latest regularMarketPrice vs first available close",
+    "journal window: last 7 local dates from market-pulse JSONL, filtered before the weekly card is saved",
 ];
 
 const REGIME_QUOTE_BASIS: &[&str] = &[
@@ -213,6 +232,7 @@ pub fn main_entry() {
 fn run(args: Vec<String>) -> Result<(), String> {
     match parse_command(&args)? {
         CommandKind::Now => now(&args),
+        CommandKind::Week => week(&args),
         CommandKind::Regime => regime(&args),
         CommandKind::Think => think(&args),
         CommandKind::Review => review(&args),
@@ -229,6 +249,7 @@ fn parse_command(args: &[String]) -> Result<CommandKind, String> {
     match args.first().map(String::as_str) {
         None => Ok(CommandKind::Now),
         Some("now") => Ok(CommandKind::Now),
+        Some("week") | Some("weekly") => Ok(CommandKind::Week),
         Some("regime") => Ok(CommandKind::Regime),
         Some("think") => Ok(CommandKind::Think),
         Some("review") => Ok(CommandKind::Review),
@@ -275,7 +296,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp week [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N]"
     );
 }
 
@@ -287,6 +308,17 @@ fn now(args: &[String]) -> Result<(), String> {
         append_event(&pulse_json(&pulse))?;
     }
     println!("{}", render_pulse(&pulse, compact));
+    Ok(())
+}
+
+fn week(args: &[String]) -> Result<(), String> {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let weekly = build_week();
+    let events = read_week_events(120);
+    if !no_save {
+        append_event(&week_json(&weekly, events.len()))?;
+    }
+    println!("{}", render_week(&weekly, &events));
     Ok(())
 }
 
@@ -662,6 +694,57 @@ fn build_pulse() -> Pulse {
     }
 }
 
+fn build_week() -> Weekly {
+    let mut assets = Vec::new();
+    let mut failures = 0;
+    for (symbol, label, unit) in SYMBOLS {
+        match fetch_asset_window(symbol, label, unit, "5d", "1d", WindowChange::FirstClose) {
+            Ok(asset) => assets.push(asset),
+            Err(_) => {
+                failures += 1;
+                assets.push(Asset {
+                    symbol,
+                    label,
+                    unit,
+                    value: None,
+                    change: None,
+                    note: Some("weekly data unavailable".into()),
+                });
+            }
+        }
+    }
+    let mut notes = vec![
+        "weekly market window uses Yahoo Finance chart endpoint via curl".to_string(),
+        "weekly journal window is a rolling 7 local-date learning review".to_string(),
+    ];
+    if failures > 0 {
+        notes.push(format!(
+            "{failures} quote(s) unavailable; weekly read is partial"
+        ));
+    }
+    let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    let label = infer_week_label(
+        avg_equity,
+        change_for(&assets, "DX-Y.NYB"),
+        change_for(&assets, "^TNX"),
+        change_for(&assets, "CL=F"),
+        change_for(&assets, "BTC-USD"),
+    );
+    let drivers = infer_week_drivers(&assets);
+    let tensions = infer_week_tensions(&assets, &label);
+    let questions = infer_week_questions(&assets, &label, &tensions);
+    Weekly {
+        timestamp: timestamp(),
+        basis: WEEK_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
+        label,
+        assets,
+        drivers,
+        tensions,
+        questions,
+        notes,
+    }
+}
+
 fn build_regime() -> Regime {
     let mut assets = Vec::new();
     let mut failures = 0;
@@ -937,6 +1020,126 @@ fn infer_concept(tensions: &[String], drivers: &[String]) -> String {
         "risk-on / risk-off"
     }
     .into()
+}
+
+fn infer_week_label(
+    avg_equity: f64,
+    usd: Option<f64>,
+    rates: Option<f64>,
+    oil: Option<f64>,
+    btc: Option<f64>,
+) -> String {
+    let macro_pressure = usd.is_some_and(|v| v > 0.7)
+        || rates.is_some_and(|v| v > 1.5)
+        || oil.is_some_and(|v| v > 4.0);
+    let high_beta = btc.is_some_and(|v| v > 5.0);
+    if avg_equity > 1.5 && !macro_pressure {
+        "risk-on learning week"
+    } else if avg_equity > 0.5 && macro_pressure {
+        "equity resilience vs macro-pressure week"
+    } else if avg_equity < -1.5 && macro_pressure {
+        "de-risking / macro-pressure week"
+    } else if avg_equity < -1.5 {
+        "risk-off / growth-doubt week"
+    } else if high_beta && avg_equity >= 0.0 {
+        "high-beta liquidity watch week"
+    } else {
+        "mixed / transition learning week"
+    }
+    .into()
+}
+
+fn infer_week_drivers(assets: &[Asset]) -> Vec<String> {
+    let mut drivers = Vec::new();
+    if change_for(assets, "^IXIC").is_some_and(|v| v > 1.5) {
+        drivers.push("Nasdaq strength is the first place to test growth/AI leadership".into());
+    }
+    if avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).is_some_and(|v| v > 1.2) {
+        drivers.push("Equities are broadly higher over the weekly window".into());
+    }
+    if change_for(assets, "DX-Y.NYB").is_some_and(|v| v.abs() > 0.7)
+        || change_for(assets, "KRW=X").is_some_and(|v| v.abs() > 0.7)
+    {
+        drivers.push("Dollar/FX moved enough to check whether liquidity pressure mattered".into());
+    }
+    if change_for(assets, "^TNX").is_some_and(|v| v.abs() > 1.5) {
+        drivers.push("US 10Y yield moved enough to test the rates-vs-growth story".into());
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v.abs() > 4.0) {
+        drivers.push(
+            "Oil moved enough to keep inflation/margin narratives in the weekly review".into(),
+        );
+    }
+    if change_for(assets, "BTC-USD").is_some_and(|v| v.abs() > 5.0) {
+        drivers.push("BTC/high beta moved enough to check liquidity appetite".into());
+    }
+    if drivers.is_empty() {
+        drivers.push(
+            "No single weekly driver dominates; use the journal themes to choose what to study"
+                .into(),
+        );
+        drivers
+            .push("Compare equities, rates, dollar, oil, and your own repeated questions".into());
+    }
+    drivers.truncate(5);
+    drivers
+}
+
+fn infer_week_tensions(assets: &[Asset], label: &str) -> Vec<String> {
+    let mut tensions = Vec::new();
+    let avg_equity = avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    if avg_equity > 0.5
+        && (change_for(assets, "^TNX").is_some_and(|v| v > 1.5)
+            || change_for(assets, "DX-Y.NYB").is_some_and(|v| v > 0.7))
+    {
+        tensions.push("weekly equity strength vs tighter financial-condition signals".into());
+    }
+    if change_for(assets, "^IXIC").unwrap_or(0.0) - change_for(assets, "^GSPC").unwrap_or(0.0) > 1.0
+    {
+        tensions.push("Nasdaq/growth leadership vs broad-market confirmation".into());
+    }
+    if change_for(assets, "^KS11").unwrap_or(0.0) < avg_equity - 1.0 {
+        tensions.push("Korea/EM follow-through vs US market story".into());
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v > 4.0) && avg_equity > 0.0 {
+        tensions.push("risk appetite vs oil/inflation impulse".into());
+    }
+    if label.contains("transition") {
+        tensions.push("this week's pulse may not match the broader regime".into());
+    }
+    if tensions.is_empty() {
+        tensions.push("headline weekly move vs cross-asset confirmation".into());
+    }
+    tensions.truncate(4);
+    tensions
+}
+
+fn infer_week_questions(assets: &[Asset], label: &str, tensions: &[String]) -> Vec<String> {
+    let text = format!("{label} {}", tensions.join(" ")).to_lowercase();
+    let mut questions = Vec::new();
+    if text.contains("financial-condition") || text.contains("rates") {
+        questions.push("Next week, do yields/dollar confirm or fight the equity story?".into());
+    }
+    if text.contains("nasdaq") || text.contains("growth") {
+        questions.push("Is leadership broadening beyond growth/AI, or still narrow?".into());
+    }
+    if text.contains("korea") || change_for(assets, "^KS11").is_some() {
+        questions
+            .push("Does KOSPI confirm the US story, or is FX/EM pressure still a drag?".into());
+    }
+    if text.contains("oil") || change_for(assets, "CL=F").is_some_and(|v| v.abs() > 4.0) {
+        questions
+            .push("Is oil changing inflation expectations, or staying sector-specific?".into());
+    }
+    questions.push("What would make you rename this week’s market story by next Friday?".into());
+    let mut unique = Vec::new();
+    for question in questions {
+        if !unique.contains(&question) {
+            unique.push(question);
+        }
+    }
+    unique.truncate(5);
+    unique
 }
 
 fn infer_regime_label(
@@ -1540,6 +1743,98 @@ fn render_regime(r: &Regime) -> String {
     out
 }
 
+fn render_week(w: &Weekly, events: &[String]) -> String {
+    let summary = summarize_events(events);
+    let mut out = format!(
+        "Weekly Market Pulse · {}\n\nWeek story\n  {}\n\nBasis\n",
+        w.timestamp, w.label
+    );
+    for b in &w.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str("\n1W Asset Map\n");
+    for a in &w.assets {
+        let value = a
+            .value
+            .map(|v| {
+                format!(
+                    "{v:.2}{}",
+                    if a.unit.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(" {}", a.unit)
+                    }
+                )
+            })
+            .unwrap_or_else(|| "n/a".into());
+        let change = a
+            .change
+            .map(|c| format!("{:+.2}%", c))
+            .unwrap_or_else(|| "n/a".into());
+        let note = a
+            .note
+            .as_ref()
+            .map(|n| format!(" · {n}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  - {}: {} ({}){}\n",
+            a.label, value, change, note
+        ));
+    }
+    out.push_str("\nWeekly market themes\n");
+    for (i, d) in w.drivers.iter().enumerate() {
+        out.push_str(&format!("  {}. {}\n", i + 1, d));
+    }
+    out.push_str("\nWeekly tensions\n");
+    for t in &w.tensions {
+        out.push_str(&format!("  - {t}\n"));
+    }
+    out.push_str(&format!(
+        "\nThis week's learning loop\n  Entries scanned: {} · pulses {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n",
+        events.len(),
+        summary.pulses,
+        summary.regimes,
+        summary.inquiries,
+        summary.research_inquiries,
+        summary.thoughts,
+        summary.feedback
+    ));
+    out.push_str("\nRecurring journal themes\n");
+    let mut wrote_themes = false;
+    for (tag, count) in summary
+        .tag_counts
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .take(5)
+    {
+        wrote_themes = true;
+        out.push_str(&format!("  - {tag}: {count}\n"));
+    }
+    if !wrote_themes {
+        out.push_str("  - Not enough tagged questions/thoughts this week yet\n");
+    }
+    out.push_str("\nQuestion / thesis habits\n");
+    if summary.thesis_types.is_empty() {
+        out.push_str("  - Ask or think at least once this week to build a visible pattern.\n");
+    } else {
+        for thesis in summary.thesis_types.iter().take(4) {
+            out.push_str(&format!("  - You used a {thesis} lens.\n"));
+        }
+    }
+    out.push_str("\nNext week check questions\n");
+    for q in &w.questions {
+        out.push_str(&format!("  - {q}\n"));
+    }
+    out.push_str("\nWeekly drill\n  Pick one repeated theme above and write one falsifiable `mp think` note before the next `mp-week`.\n\nBoundary\n  Market literacy only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions.\n");
+    if !w.notes.is_empty() {
+        out.push_str("\nSource notes\n");
+        for n in &w.notes {
+            out.push_str(&format!("  - {n}\n"));
+        }
+    }
+    out
+}
+
 fn question_seeds_for(p: &Pulse) -> Vec<String> {
     let text = format!(
         "{} {} {}",
@@ -1726,6 +2021,18 @@ fn read_events(limit: usize) -> Vec<String> {
     limit_events(read_event_lines(&text), limit)
 }
 
+fn read_week_events(limit: usize) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(journal_path()) else {
+        return Vec::new();
+    };
+    let events = read_event_lines(&text);
+    let dates = date_prefixes_for_days(7);
+    if dates.is_empty() {
+        return limit_events(events, limit);
+    }
+    filter_events_by_dates(events, &dates, limit)
+}
+
 fn read_event_lines(text: &str) -> Vec<String> {
     text.lines()
         .filter(|l| !l.trim().is_empty())
@@ -1753,6 +2060,23 @@ fn filter_events_by_date(events: Vec<String>, date: &str, limit: usize) -> Vec<S
         .filter(|l| event_matches_date(l, date))
         .collect::<Vec<_>>();
     limit_events(lines, limit)
+}
+
+fn filter_events_by_dates(events: Vec<String>, dates: &[String], limit: usize) -> Vec<String> {
+    let lines = events
+        .into_iter()
+        .filter(|l| {
+            json_field(l, "timestamp")
+                .is_some_and(|ts| dates.iter().any(|date| ts.starts_with(date)))
+        })
+        .collect::<Vec<_>>();
+    limit_events(lines, limit)
+}
+
+fn date_prefixes_for_days(days: u32) -> Vec<String> {
+    (0..days)
+        .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+        .collect()
 }
 
 fn event_matches_date(line: &str, date: &str) -> bool {
@@ -1832,35 +2156,28 @@ fn render_review_for_date_from_events(events: &[String], journal: &str, date: &s
     out
 }
 
-fn render_review_from_events(events: &[String], journal: &str) -> String {
-    if events.is_empty() {
-        return "No market-pulse journal entries yet. Start with `mp \"your market question\"`, then `mp think \"...\"`.".into();
-    }
-    let pulses = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"pulse\""))
-        .count();
-    let thoughts = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"thought\""))
-        .count();
-    let regimes = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"regime\""))
-        .count();
-    let inquiries = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"inquiry\""))
-        .count();
-    let research_inquiries = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"research_inquiry\""))
-        .count();
-    let feedback = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"feedback\""))
-        .count();
-    let mut counts: Vec<(&str, usize)> = vec![
+#[derive(Clone, Debug)]
+struct JournalSummary {
+    pulses: usize,
+    weeks: usize,
+    regimes: usize,
+    inquiries: usize,
+    research_inquiries: usize,
+    thoughts: usize,
+    feedback: usize,
+    tag_counts: Vec<(&'static str, usize)>,
+    thesis_types: Vec<String>,
+}
+
+fn summarize_events(events: &[String]) -> JournalSummary {
+    let pulses = count_events(events, "pulse");
+    let weeks = count_events(events, "week");
+    let regimes = count_events(events, "regime");
+    let inquiries = count_events(events, "inquiry");
+    let research_inquiries = count_events(events, "research_inquiry");
+    let thoughts = count_events(events, "thought");
+    let feedback = count_events(events, "feedback");
+    let mut tag_counts: Vec<(&str, usize)> = vec![
         ("rates", 0),
         ("semis", 0),
         ("fx", 0),
@@ -1884,17 +2201,45 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
             thesis_types.push(detect_thesis_type(&tags));
         }
         for tag in tags {
-            if let Some((_, count)) = counts.iter_mut().find(|(name, _)| *name == tag) {
+            if let Some((_, count)) = tag_counts.iter_mut().find(|(name, _)| *name == tag) {
                 *count += 1;
             }
         }
     }
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    tag_counts.sort_by(|a, b| b.1.cmp(&a.1));
     thesis_types.sort();
     thesis_types.dedup();
-    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), pulses, regimes, inquiries, research_inquiries, thoughts, feedback);
+    JournalSummary {
+        pulses,
+        weeks,
+        regimes,
+        inquiries,
+        research_inquiries,
+        thoughts,
+        feedback,
+        tag_counts,
+        thesis_types,
+    }
+}
+
+fn count_events(events: &[String], event_type: &str) -> usize {
+    let needle = format!("\"type\":\"{event_type}\"");
+    events.iter().filter(|l| l.contains(&needle)).count()
+}
+
+fn render_review_from_events(events: &[String], journal: &str) -> String {
+    if events.is_empty() {
+        return "No market-pulse journal entries yet. Start with `mp \"your market question\"`, then `mp think \"...\"`.".into();
+    }
+    let summary = summarize_events(events);
+    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), summary.pulses, summary.weeks, summary.regimes, summary.inquiries, summary.research_inquiries, summary.thoughts, summary.feedback);
     let mut wrote = false;
-    for (tag, count) in counts.into_iter().filter(|(_, c)| *c > 0).take(6) {
+    for (tag, count) in summary
+        .tag_counts
+        .into_iter()
+        .filter(|(_, c)| *c > 0)
+        .take(6)
+    {
         wrote = true;
         out.push_str(&format!("  - {tag}: {count}\n"));
     }
@@ -1902,10 +2247,10 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
         out.push_str("  - Not enough tagged thoughts yet\n");
     }
     out.push_str("\nQuestion / thesis habits\n");
-    if thesis_types.is_empty() {
+    if summary.thesis_types.is_empty() {
         out.push_str("  - Not enough inquiry/thesis history yet; ask one rough question with `mp \"...\"`.\n");
     } else {
-        for t in thesis_types.iter().take(5) {
+        for t in summary.thesis_types.iter().take(5) {
             out.push_str(&format!("  - You have been using a {t} lens.\n"));
         }
     }
@@ -1932,6 +2277,17 @@ fn regime_json(r: &Regime) -> String {
         esc(&r.basis.join(" | ")),
         esc(&r.label),
         esc(&r.question)
+    )
+}
+
+fn week_json(w: &Weekly, journal_entries: usize) -> String {
+    format!(
+        "{{\"type\":\"week\",\"timestamp\":\"{}\",\"basis\":\"{}\",\"label\":\"{}\",\"journal_entries\":{},\"question\":\"{}\"}}",
+        esc(&w.timestamp),
+        esc(&w.basis.join(" | ")),
+        esc(&w.label),
+        journal_entries,
+        esc(w.questions.first().map(String::as_str).unwrap_or(""))
     )
 }
 
@@ -2058,6 +2414,18 @@ mod tests {
         assert_eq!(
             parse_command(&["regime".into(), "--no-save".into()]).unwrap(),
             CommandKind::Regime
+        );
+    }
+
+    #[test]
+    fn routes_week_to_week_command() {
+        assert_eq!(
+            parse_command(&["week".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Week
+        );
+        assert_eq!(
+            parse_command(&["weekly".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Week
         );
     }
 
@@ -2373,6 +2741,20 @@ mod tests {
     }
 
     #[test]
+    fn week_date_filter_keeps_last_matching_dates() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-19T09:00:00+0900\",\"text\":\"유가\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"금리\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"text\":\"달러\",\"linked_pulse_timestamp\":null}".into(),
+        ];
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let filtered = filter_events_by_dates(events, &dates, 10);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered[0].contains("10:00:00"));
+        assert!(filtered[1].contains("11:00:00"));
+    }
+
+    #[test]
     fn review_date_validation_rejects_non_iso_date() {
         assert!(validate_review_date("2026-04-21").is_ok());
         assert!(validate_review_date("20260421").is_err());
@@ -2483,6 +2865,48 @@ mod tests {
         assert!(rendered.contains("not investment advice"));
     }
 
+    #[test]
+    fn week_renders_hybrid_market_and_learning_card() {
+        let week = compose_test_week(vec![
+            Asset {
+                symbol: "^IXIC",
+                label: "Nasdaq",
+                unit: "",
+                value: Some(100.0),
+                change: Some(2.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^GSPC",
+                label: "S&P 500",
+                unit: "",
+                value: Some(100.0),
+                change: Some(1.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^TNX",
+                label: "US 10Y",
+                unit: "%",
+                value: Some(4.8),
+                change: Some(1.8),
+                note: None,
+            },
+        ]);
+        let events = vec![
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T09:00:00+0900\",\"question\":\"금리와 반도체가 같이 움직이나?\",\"thesis_type\":\"rates/growth tension thesis\",\"concepts\":\"rates vs growth\"}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T10:00:00+0900\",\"text\":\"달러가 강한데 코스피가 버틴다\",\"linked_pulse_timestamp\":null}".into(),
+        ];
+        let rendered = render_week(&week, &events);
+        assert!(rendered.contains("Weekly Market Pulse"));
+        assert!(rendered.contains("1W Asset Map"));
+        assert!(rendered.contains("This week's learning loop"));
+        assert!(rendered.contains("Recurring journal themes"));
+        assert!(rendered.contains("Next week check questions"));
+        assert!(rendered.contains("rates"));
+        assert!(rendered.contains("not investment advice"));
+    }
+
     fn compose_test_pulse(assets: Vec<Asset>) -> Pulse {
         let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
         let mood = infer_mood(
@@ -2526,6 +2950,29 @@ mod tests {
                 .collect(),
             question: infer_regime_question(&label, &tensions),
             checks: infer_regime_checks(&assets, &label),
+            label,
+            assets,
+            drivers,
+            tensions,
+            notes: vec![],
+        }
+    }
+
+    fn compose_test_week(assets: Vec<Asset>) -> Weekly {
+        let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+        let label = infer_week_label(
+            avg_equity,
+            change_for(&assets, "DX-Y.NYB"),
+            change_for(&assets, "^TNX"),
+            change_for(&assets, "CL=F"),
+            change_for(&assets, "BTC-USD"),
+        );
+        let drivers = infer_week_drivers(&assets);
+        let tensions = infer_week_tensions(&assets, &label);
+        Weekly {
+            timestamp: timestamp(),
+            basis: WEEK_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
+            questions: infer_week_questions(&assets, &label, &tensions),
             label,
             assets,
             drivers,
