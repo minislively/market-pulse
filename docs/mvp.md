@@ -69,6 +69,9 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Reads recent JSONL journal events.
+- Supports `--date YYYY-MM-DD` to filter by the timestamp date stored in journal entries.
+- Applies `--limit N` after date matching when both are provided, keeping the most recent matching entries.
+- Shows a distinct empty-date message when no entries match the requested date.
 - Surfaces repeated themes, concepts, inquiry counts, and question/thesis habits.
 - Suggests one reasoning drill.
 
@@ -95,6 +98,5 @@ Acceptance criteria:
 - built-in live RSS/SEC/news network providers
 - built-in Brave/Tavily/NewsAPI/SerpApi/Alpha Vantage/FRED integrations
 - article body storage or summarization
-- date-based journal lookup/search such as `mp review --date YYYY-MM-DD`
 - external plugin loading
 - paid data vendors

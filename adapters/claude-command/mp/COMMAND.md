@@ -17,6 +17,7 @@ description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색
 /mp regime
 /mp think 금리가 부담인데도 반도체가 버티는 것 같다
 /mp review
+mp review --date 2026-04-21
 ```
 
 인자가 없으면 `/mp now`로 처리합니다.
@@ -31,6 +32,7 @@ description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색
    - 알려진 명령어가 아닌 일반 텍스트: `mp "<question>"` 실행
    - `think <text>`: `mp think "<text>"` 실행
    - `review`: `mp review` 실행
+   - `review --date YYYY-MM-DD`: `mp review --date YYYY-MM-DD` 실행
 2. 가능한 한 로컬 CLI를 직접 실행합니다.
 3. CLI 출력은 핵심만 정리하되, 중요한 피드백 구조는 유지합니다.
 4. `MARKET_PULSE_SEARCH_CMD`가 설정되어 있으면 `mp`가 제한형 JSONL source bridge로 사용하게 두고, slash command 프롬프트에서 검색을 재구현하지 않습니다.
@@ -92,4 +94,5 @@ mp think "금리가 부담인데도 반도체가 버티는 것 같다"
 
 ```bash
 mp review
+mp review --date 2026-04-21
 ```

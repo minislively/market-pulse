@@ -41,6 +41,7 @@ $mp ask "대형 IPO 때문에 성장주가 강한 걸까?"
 $mp research "금리 하락이 성장주에 좋은 신호임?"
 $mp think "금리가 부담인데도 반도체가 버티는 것 같다"
 $mp review
+$mp review --date 2026-04-21
 
 $mp-now
 $mp-regime
@@ -48,6 +49,7 @@ $mp-ask "대형 IPO 때문에 성장주가 강한 걸까?"
 $mp-research "금리 하락이 성장주에 좋은 신호임?"
 $mp-think "금리가 부담인데도 반도체가 버티는 것 같다"
 $mp-review
+$mp-review --date 2026-04-21
 ```
 
 ## Contract

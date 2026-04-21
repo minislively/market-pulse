@@ -275,7 +275,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD]"
     );
 }
 
@@ -514,6 +514,7 @@ fn research_source_from_json_line(line: &str) -> Option<ResearchSource> {
 
 fn review(args: &[String]) -> Result<(), String> {
     let mut limit = 80usize;
+    let mut date: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--limit" {
@@ -523,11 +524,44 @@ fn review(args: &[String]) -> Result<(), String> {
                     .map_err(|_| "--limit must be a number".to_string())?;
             }
             i += 1;
+        } else if args[i] == "--date" {
+            let Some(raw) = args.get(i + 1) else {
+                return Err("--date needs YYYY-MM-DD".into());
+            };
+            validate_review_date(raw)?;
+            date = Some(raw.clone());
+            i += 1;
         }
         i += 1;
     }
-    println!("{}", render_review(limit));
+    let rendered = if let Some(date) = date {
+        render_review_for_date(limit, &date)
+    } else {
+        render_review(limit)
+    };
+    println!("{rendered}");
     Ok(())
+}
+
+fn validate_review_date(date: &str) -> Result<(), String> {
+    let bytes = date.as_bytes();
+    let shape_valid = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+    if !shape_valid {
+        return Err("--date must use YYYY-MM-DD".into());
+    }
+    let month = date[5..7].parse::<u32>().unwrap_or(0);
+    let day = date[8..10].parse::<u32>().unwrap_or(0);
+    if (1..=12).contains(&month) && (1..=31).contains(&day) {
+        Ok(())
+    } else {
+        Err("--date must be a valid YYYY-MM-DD date".into())
+    }
 }
 
 fn build_pulse() -> Pulse {
@@ -1641,15 +1675,40 @@ fn read_events(limit: usize) -> Vec<String> {
     let Ok(text) = fs::read_to_string(journal_path()) else {
         return Vec::new();
     };
-    let mut lines = text
-        .lines()
+    limit_events(read_event_lines(&text), limit)
+}
+
+fn read_event_lines(text: &str) -> Vec<String> {
+    text.lines()
         .filter(|l| !l.trim().is_empty())
         .map(str::to_string)
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn limit_events(mut lines: Vec<String>, limit: usize) -> Vec<String> {
     if lines.len() > limit {
         lines = lines.split_off(lines.len() - limit);
     }
     lines
+}
+
+fn read_events_for_date(limit: usize, date: &str) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(journal_path()) else {
+        return Vec::new();
+    };
+    filter_events_by_date(read_event_lines(&text), date, limit)
+}
+
+fn filter_events_by_date(events: Vec<String>, date: &str, limit: usize) -> Vec<String> {
+    let lines = events
+        .into_iter()
+        .filter(|l| event_matches_date(l, date))
+        .collect::<Vec<_>>();
+    limit_events(lines, limit)
+}
+
+fn event_matches_date(line: &str, date: &str) -> bool {
+    json_field(line, "timestamp").is_some_and(|ts| ts.starts_with(date))
 }
 
 fn latest_pulse_timestamp() -> Option<String> {
@@ -1707,6 +1766,22 @@ fn parse_json_string(text_after_opening_quote: &str) -> Option<String> {
 fn render_review(limit: usize) -> String {
     let events = read_events(limit);
     render_review_from_events(&events, &journal_path().display().to_string())
+}
+
+fn render_review_for_date(limit: usize, date: &str) -> String {
+    let events = read_events_for_date(limit, date);
+    render_review_for_date_from_events(&events, &journal_path().display().to_string(), date)
+}
+
+fn render_review_for_date_from_events(events: &[String], journal: &str, date: &str) -> String {
+    if events.is_empty() {
+        return format!(
+            "No market-pulse journal entries found for {date}.\n\nJournal: {journal}\nTry `mp review --limit N` to inspect recent entries, or record one with `mp now`, `mp regime`, `mp ask`, or `mp think`."
+        );
+    }
+    let mut out = format!("Review date filter: {date}\n\n");
+    out.push_str(&render_review_from_events(events, journal));
+    out
 }
 
 fn render_review_from_events(events: &[String], journal: &str) -> String {
@@ -2210,6 +2285,52 @@ mod tests {
         assert!(out.contains("Question / thesis habits"));
         assert!(out.contains("event"));
         assert!(out.contains("rates"));
+    }
+
+    #[test]
+    fn review_date_filter_keeps_only_matching_timestamp_date() {
+        let events = vec![
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-20T09:00:00+0900\",\"question\":\"달러가 코스피에 부담?\",\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T10:00:00+0900\",\"text\":\"금리가 내려가는데 성장주가 버틴다\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"research_inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"대형 IPO가 시장에 영향?\",\"provider\":\"noop\",\"source_count\":0,\"thesis_type\":\"event-driven / supply-calendar thesis\",\"concepts\":\"event-driven supply/attention\"}".into(),
+        ];
+        let filtered = filter_events_by_date(events, "2026-04-21", 80);
+        assert_eq!(filtered.len(), 2);
+        let out = render_review_for_date_from_events(&filtered, "/tmp/journal.jsonl", "2026-04-21");
+        assert!(out.contains("Review date filter: 2026-04-21"));
+        assert!(out.contains("Entries scanned: 2"));
+        assert!(out.contains("rates"));
+        assert!(out.contains("event"));
+        assert!(!out.contains("dollar-liquidity"));
+    }
+
+    #[test]
+    fn review_date_filter_applies_limit_after_date_match() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T09:00:00+0900\",\"text\":\"금리\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T10:00:00+0900\",\"text\":\"달러\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"text\":\"유가\",\"linked_pulse_timestamp\":null}".into(),
+        ];
+        let filtered = filter_events_by_date(events, "2026-04-21", 2);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered[0].contains("10:00:00"));
+        assert!(filtered[1].contains("11:00:00"));
+    }
+
+    #[test]
+    fn review_date_filter_has_empty_date_message() {
+        let out = render_review_for_date_from_events(&[], "/tmp/journal.jsonl", "2026-04-19");
+        assert!(out.contains("No market-pulse journal entries found for 2026-04-19"));
+        assert!(out.contains("mp review --limit N"));
+    }
+
+    #[test]
+    fn review_date_validation_rejects_non_iso_date() {
+        assert!(validate_review_date("2026-04-21").is_ok());
+        assert!(validate_review_date("20260421").is_err());
+        assert!(validate_review_date("2026-99-99").is_err());
+        assert!(validate_review_date("yesterday").is_err());
+        assert!(review(&["review".into(), "--date".into(), "bad".into()]).is_err());
     }
 
     #[test]

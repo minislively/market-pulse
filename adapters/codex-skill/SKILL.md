@@ -16,6 +16,7 @@ Use the local `mp` CLI. Keep this skill thin: do not reimplement market-pulse in
 - `$mp regime` -> run `mp regime`
 - `$mp think <text>` -> run `mp think "<text>"`
 - `$mp review` -> run `mp review`
+- `$mp review --date YYYY-MM-DD` -> run `mp review --date YYYY-MM-DD`
 
 Readable alias skills are also available when installed from `adapters/codex-skill/aliases/`:
 
@@ -24,7 +25,7 @@ Readable alias skills are also available when installed from `adapters/codex-ski
 - `$mp-ask <question>` -> run `mp ask "<question>"`
 - `$mp-research <question>` -> run `mp research "<question>"`
 - `$mp-think <text>` -> run `mp think "<text>"`
-- `$mp-review` -> run `mp review`
+- `$mp-review` -> run `mp review` or `mp review --date YYYY-MM-DD` when a date flag is supplied
 
 If the user invokes `$mp` without arguments, treat it as `$mp now`.
 
