@@ -29,6 +29,7 @@ Then in Claude Code:
 /mp think 금리가 부담인데도 반도체가 버티는 것 같다
 /mp review
 /mp review --date 2026-04-21
+/mp review --ago 1
 ```
 
 ## Contract

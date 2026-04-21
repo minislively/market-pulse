@@ -70,7 +70,8 @@ Acceptance criteria:
 
 - Reads recent JSONL journal events.
 - Supports `--date YYYY-MM-DD` to filter by the timestamp date stored in journal entries.
-- Applies `--limit N` after date matching when both are provided, keeping the most recent matching entries.
+- Supports `--ago N` / `--days-ago N` for common relative-day lookup without broad natural-language parsing.
+- Applies `--limit N` after date matching when combined with `--date` or `--ago`, keeping the most recent matching entries.
 - Shows a distinct empty-date message when no entries match the requested date.
 - Surfaces repeated themes, concepts, inquiry counts, and question/thesis habits.
 - Suggests one reasoning drill.

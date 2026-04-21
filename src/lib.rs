@@ -275,7 +275,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--ago N]"
     );
 }
 
@@ -529,7 +529,20 @@ fn review(args: &[String]) -> Result<(), String> {
                 return Err("--date needs YYYY-MM-DD".into());
             };
             validate_review_date(raw)?;
+            if date.is_some() {
+                return Err("use only one review date selector".into());
+            }
             date = Some(raw.clone());
+            i += 1;
+        } else if args[i] == "--ago" || args[i] == "--days-ago" {
+            let Some(raw) = args.get(i + 1) else {
+                return Err(format!("{} needs a number of days", args[i]));
+            };
+            if date.is_some() {
+                return Err("use only one review date selector".into());
+            }
+            let days = parse_review_days_ago(raw)?;
+            date = Some(date_for_days_ago(days)?);
             i += 1;
         }
         i += 1;
@@ -541,6 +554,41 @@ fn review(args: &[String]) -> Result<(), String> {
     };
     println!("{rendered}");
     Ok(())
+}
+
+fn parse_review_days_ago(raw: &str) -> Result<u32, String> {
+    let days = raw
+        .parse::<u32>()
+        .map_err(|_| "--ago must be a non-negative whole number".to_string())?;
+    if days <= 3660 {
+        Ok(days)
+    } else {
+        Err("--ago must be 3660 days or less".into())
+    }
+}
+
+fn date_for_days_ago(days: u32) -> Result<String, String> {
+    if days == 0 {
+        return command_date(&["+%Y-%m-%d"])
+            .ok_or_else(|| "--ago needs the local `date` command".into());
+    }
+    let bsd_offset = format!("-v-{days}d");
+    if let Some(date) = command_date(&[&bsd_offset, "+%Y-%m-%d"]) {
+        return Ok(date);
+    }
+    let gnu_relative = format!("{days} days ago");
+    command_date(&["-d", &gnu_relative, "+%Y-%m-%d"])
+        .ok_or_else(|| "--ago needs BSD `date -v` or GNU `date -d` support".into())
+}
+
+fn command_date(args: &[&str]) -> Option<String> {
+    let output = Command::new("date").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let date = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    validate_review_date(&date).ok()?;
+    Some(date)
 }
 
 fn validate_review_date(date: &str) -> Result<(), String> {
@@ -2331,6 +2379,27 @@ mod tests {
         assert!(validate_review_date("2026-99-99").is_err());
         assert!(validate_review_date("yesterday").is_err());
         assert!(review(&["review".into(), "--date".into(), "bad".into()]).is_err());
+    }
+
+    #[test]
+    fn review_days_ago_validation_accepts_small_whole_numbers() {
+        assert_eq!(parse_review_days_ago("0").unwrap(), 0);
+        assert_eq!(parse_review_days_ago("5").unwrap(), 5);
+        assert!(parse_review_days_ago("-1").is_err());
+        assert!(parse_review_days_ago("1.5").is_err());
+        assert!(parse_review_days_ago("4000").is_err());
+    }
+
+    #[test]
+    fn review_rejects_multiple_date_selectors() {
+        assert!(review(&[
+            "review".into(),
+            "--date".into(),
+            "2026-04-21".into(),
+            "--ago".into(),
+            "1".into(),
+        ])
+        .is_err());
     }
 
     #[test]
