@@ -147,6 +147,33 @@ Records your market interpretation and returns structured feedback:
 
 Reviews recent pulses, inquiries, thoughts, and feedback to surface recurring themes, question habits, and reasoning drills.
 
+
+## OMX/Codex aliases
+
+When the Codex/OMX skill adapter is installed, you can use readable `$mp-*`
+aliases inside Codex/OMX sessions without changing the standalone shell CLI:
+
+```text
+$mp-now
+$mp-ask "대형 IPO 때문에 성장주가 강한 걸까?"
+$mp-research "금리 하락이 성장주에 좋은 신호임?"
+$mp-think "금리가 부담인데도 반도체가 버티는 것 같다"
+$mp-review
+```
+
+These aliases are thin wrappers around the same local `mp` binary:
+
+- `$mp-now` -> `mp now`
+- `$mp-ask` -> `mp ask`
+- `$mp-research` -> `mp research`
+- `$mp-think` -> `mp think`
+- `$mp-review` -> `mp review`
+
+The canonical `$mp ...` skill remains available for flexible calls. The aliases
+are explicit only: they do not auto-capture arbitrary market/economy sentences,
+and live/source-backed lookup still requires `$mp-research` or an existing
+`mp ... --research` flow.
+
 ## Storage
 
 By default, entries are written to:
@@ -193,6 +220,7 @@ make smoke
 The repo includes thin adapters that call the same standalone `mp` binary:
 
 - Codex skill: `adapters/codex-skill/SKILL.md`
+- Codex readable alias skills: `adapters/codex-skill/aliases/`
 - Claude Code slash command: `adapters/claude-command/mp/COMMAND.md`
 
 ## Design

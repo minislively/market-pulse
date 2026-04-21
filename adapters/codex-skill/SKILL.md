@@ -16,6 +16,14 @@ Use the local `mp` CLI. Keep this skill thin: do not reimplement market-pulse in
 - `$mp think <text>` -> run `mp think "<text>"`
 - `$mp review` -> run `mp review`
 
+Readable alias skills are also available when installed from `adapters/codex-skill/aliases/`:
+
+- `$mp-now` -> run `mp now`
+- `$mp-ask <question>` -> run `mp ask "<question>"`
+- `$mp-research <question>` -> run `mp research "<question>"`
+- `$mp-think <text>` -> run `mp think "<text>"`
+- `$mp-review` -> run `mp review`
+
 If the user invokes `$mp` without arguments, treat it as `$mp now`.
 
 ## Rules
