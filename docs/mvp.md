@@ -71,8 +71,9 @@ Acceptance criteria:
 ## Adapter kits
 
 - `adapters/search-command/` provides a provider-agnostic fixture kit for
-  `MARKET_PULSE_SEARCH_CMD`. It is executable documentation for the JSONL source
-  contract, not a live provider integration.
+  `MARKET_PULSE_SEARCH_CMD` plus an optional Brave Web Search wrapper that
+  emits the same JSONL source metadata contract. Standard smoke tests remain
+  key-free; live Brave smoke is opt-in via `BRAVE_SEARCH_API_KEY`.
 
 ## Deferred
 
@@ -81,7 +82,7 @@ Acceptance criteria:
 - portfolio support
 - backtesting
 - built-in live RSS/SEC/news network providers
-- Brave/Tavily/NewsAPI/SerpApi/Alpha Vantage/FRED integrations
+- built-in Brave/Tavily/NewsAPI/SerpApi/Alpha Vantage/FRED integrations
 - article body storage or summarization
 - external plugin loading
 - paid data vendors

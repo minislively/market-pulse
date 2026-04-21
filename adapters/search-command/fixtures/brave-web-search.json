@@ -1,0 +1,31 @@
+{
+  "type": "search",
+  "query": {
+    "original": "달러 강세가 코스피에 부담임?",
+    "show_strict_warning": false,
+    "more_results_available": true
+  },
+  "web": {
+    "type": "search",
+    "results": [
+      {
+        "title": "Dollar strength pressures Asian equity markets",
+        "url": "https://example.com/markets/dollar-kospi-pressure",
+        "description": "A stronger U.S. dollar can tighten financial conditions for emerging markets and pressure foreign flows into Korea equities.",
+        "age": "2026-04-20",
+        "profile": {
+          "name": "Example Markets"
+        }
+      },
+      {
+        "title": "Exporters can offset currency pressure in Korea indexes",
+        "url": "https://example.org/korea/exporters-currency-offset",
+        "description": "KOSPI impact depends on whether KRW weakness coincides with foreign selling or is offset by exporter earnings expectations.",
+        "age": "2026-04-19",
+        "profile": {
+          "name": "Example Korea Macro"
+        }
+      }
+    ]
+  }
+}

@@ -91,6 +91,22 @@ MARKET_PULSE_SEARCH_CMD='./adapters/search-command/fixture-jsonl {query}' \
   mp "금리 하락이 성장주에 좋은 신호임?" --research
 ```
 
+For opt-in live web source metadata through Brave Web Search, set a user-owned
+API key and point the hook at the Brave wrapper:
+
+```bash
+export BRAVE_SEARCH_API_KEY='...'
+MARKET_PULSE_SEARCH_CMD='./adapters/search-command/brave-jsonl {query}' \
+  mp "달러 강세가 코스피에 부담임?" --research --no-save
+```
+
+The Brave wrapper also has a key-free fixture mode for deterministic smoke tests:
+
+```bash
+MARKET_PULSE_SEARCH_CMD='./adapters/search-command/brave-jsonl --fixture {query}' \
+  mp "달러 강세가 코스피에 부담임?" --research --no-save
+```
+
 Each output line should be source metadata:
 
 ```json

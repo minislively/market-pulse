@@ -52,8 +52,8 @@ The MVP intentionally avoids Rust crate dependencies. It uses the standard libra
 
 The external command supplies source metadata only; market-pulse keeps ownership
 of rendering, counter-views, data-to-check prompts, next questions, journaling,
-and safety boundaries. The current `adapters/search-command/` kit is
-intentionally provider-agnostic and fixture-only; live provider selection
-remains deferred.
+and safety boundaries. The current `adapters/search-command/` kit keeps the
+provider-agnostic fixture and adds an optional Brave Web Search wrapper;
+built-in provider selection and Rust core registry work remain deferred.
 
 Built-in RSS/SEC/news fetches, paid data vendors, article body storage, and background daemons are outside the current MVP and require explicit confirmation before implementation.

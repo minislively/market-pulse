@@ -1,0 +1,168 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'json'
+require 'net/http'
+require 'uri'
+
+ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
+FIXTURE_PATH = File.join(__dir__, 'fixtures', 'brave-web-search.json')
+DEFAULT_COUNT = 5
+MAX_COUNT = 20
+OPEN_TIMEOUT_SECONDS = 1
+READ_TIMEOUT_SECONDS = 2
+
+USAGE = <<~TEXT
+  Usage:
+    BRAVE_SEARCH_API_KEY=... ./adapters/search-command/brave-jsonl <query>
+    ./adapters/search-command/brave-jsonl --fixture <query>
+
+  Emits JSON Lines source metadata rows for MARKET_PULSE_SEARCH_CMD.
+  Diagnostics are printed to stderr; API keys are never printed.
+TEXT
+
+def fail_with(message, code = 1)
+  warn "brave-jsonl: #{message}"
+  exit code
+end
+
+def clamp_count(value)
+  count = Integer(value || DEFAULT_COUNT)
+  [[count, 1].max, MAX_COUNT].min
+rescue ArgumentError, TypeError
+  DEFAULT_COUNT
+end
+
+def host_from(url)
+  URI.parse(url.to_s).host || url.to_s
+rescue URI::InvalidURIError
+  url.to_s
+end
+
+def first_string(*values)
+  values.flatten.compact.map(&:to_s).find { |value| !value.strip.empty? }&.strip
+end
+
+def publisher_for(result)
+  first_string(
+    result.dig('profile', 'name'),
+    result.dig('meta_url', 'hostname'),
+    result.dig('meta_url', 'netloc'),
+    host_from(result['url'])
+  ) || 'Brave Web Search'
+end
+
+def source_row(result, query)
+  title = first_string(result['title'], result['url']) || 'Brave Web Search result'
+  url = first_string(result['url']) || 'about:blank'
+  evidence = first_string(result['description'], result['snippet'], result['extra_snippets'], url) || title
+
+  row = {
+    'title' => title,
+    'publisher' => publisher_for(result),
+    'url' => url,
+    'evidence' => evidence,
+    'relevance' => "Brave Web Search result for: #{query}"
+  }
+
+  published_at = first_string(result['age'], result['page_age'], result['published_at'])
+  row['published_at'] = published_at if published_at
+  row
+end
+
+def emit_rows(data, query)
+  results = data.dig('web', 'results')
+  fail_with('response did not contain web.results array', 4) unless results.is_a?(Array)
+
+  rows = results.first(MAX_COUNT).map do |result|
+    next unless result.is_a?(Hash)
+
+    source_row(result, query)
+  end.compact
+
+  fail_with('response contained no usable web results', 4) if rows.empty?
+
+  rows.each { |row| puts JSON.generate(row) }
+end
+
+def read_fixture
+  JSON.parse(File.read(FIXTURE_PATH))
+rescue Errno::ENOENT
+  fail_with("fixture not found at #{FIXTURE_PATH}", 3)
+rescue JSON::ParserError => e
+  fail_with("fixture JSON is invalid: #{e.message}", 3)
+end
+
+def live_search(query)
+  key = ENV.fetch('BRAVE_SEARCH_API_KEY', '').strip
+  if key.empty?
+    fail_with(
+      'BRAVE_SEARCH_API_KEY is not set. Set it for live Brave Web Search, or run with --fixture for key-free local smoke.',
+      2
+    )
+  end
+
+  count = clamp_count(ENV['BRAVE_SEARCH_COUNT'])
+  params = {
+    'q' => query,
+    'count' => count.to_s,
+    'result_filter' => 'web',
+    'text_decorations' => 'false'
+  }
+
+  freshness = ENV.fetch('BRAVE_SEARCH_FRESHNESS', '').strip
+  params['freshness'] = freshness unless freshness.empty?
+
+  country = ENV.fetch('BRAVE_SEARCH_COUNTRY', '').strip
+  params['country'] = country unless country.empty?
+
+  search_lang = ENV.fetch('BRAVE_SEARCH_LANG', '').strip
+  params['search_lang'] = search_lang unless search_lang.empty?
+
+  ui_lang = ENV.fetch('BRAVE_SEARCH_UI_LANG', '').strip
+  params['ui_lang'] = ui_lang unless ui_lang.empty?
+
+  uri = URI(ENDPOINT)
+  uri.query = URI.encode_www_form(params)
+
+  http = Net::HTTP.new(uri.host, uri.port)
+  http.use_ssl = true
+  http.open_timeout = OPEN_TIMEOUT_SECONDS
+  http.read_timeout = READ_TIMEOUT_SECONDS
+
+  request = Net::HTTP::Get.new(uri)
+  request['Accept'] = 'application/json'
+  request['X-Subscription-Token'] = key
+
+  response = http.request(request)
+  unless response.is_a?(Net::HTTPSuccess)
+    fail_with("Brave Web Search request failed with HTTP #{response.code}; check API key, quota, and query.", 5)
+  end
+
+  JSON.parse(response.body)
+rescue JSON::ParserError => e
+  fail_with("Brave Web Search returned invalid JSON: #{e.message}", 5)
+rescue Timeout::Error, Errno::ECONNREFUSED, Errno::ECONNRESET, SocketError, OpenSSL::SSL::SSLError => e
+  fail_with("Brave Web Search request failed: #{e.class}", 5)
+end
+
+fixture = false
+args = []
+
+ARGV.each do |arg|
+  case arg
+  when '--fixture'
+    fixture = true
+  when '--help', '-h'
+    puts USAGE
+    exit 0
+  else
+    args << arg
+  end
+end
+
+query = args.join(' ').strip
+fail_with('query is required', 2) if query.empty?
+
+data = fixture ? read_fixture : live_search(query)
+emit_rows(data, query)
