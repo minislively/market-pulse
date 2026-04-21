@@ -45,6 +45,16 @@ Acceptance criteria:
 - Saves a `pulse` journal event unless `--no-save` is passed.
 - Does not block the loop if live quote fetch fails.
 
+### `mp regime`
+
+Acceptance criteria:
+
+- Prints a broader market regime card distinct from `mp now`.
+- Uses a 1-3 month basis by default: local timestamp plus latest Yahoo `regularMarketPrice` vs first available close from `range=3mo&interval=1wk`.
+- Includes regime label, explicit basis, cross-asset map, regime drivers, tensions, checks, and next better regime question.
+- Saves a `regime` journal event unless `--no-save` is passed.
+- Avoids trading advice.
+
 ### `mp think "..."`
 
 Acceptance criteria:
@@ -85,5 +95,6 @@ Acceptance criteria:
 - built-in live RSS/SEC/news network providers
 - built-in Brave/Tavily/NewsAPI/SerpApi/Alpha Vantage/FRED integrations
 - article body storage or summarization
+- date-based journal lookup/search such as `mp review --date YYYY-MM-DD`
 - external plugin loading
 - paid data vendors

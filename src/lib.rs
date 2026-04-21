@@ -31,6 +31,19 @@ struct Pulse {
 }
 
 #[derive(Clone, Debug)]
+struct Regime {
+    timestamp: String,
+    basis: Vec<String>,
+    label: String,
+    assets: Vec<Asset>,
+    drivers: Vec<String>,
+    tensions: Vec<String>,
+    checks: Vec<String>,
+    question: String,
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 struct Inquiry {
     timestamp: String,
     question: String,
@@ -158,6 +171,7 @@ struct Feedback {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandKind {
     Now,
+    Regime,
     Think,
     Review,
     Help,
@@ -169,6 +183,12 @@ const PULSE_QUOTE_BASIS: &[&str] = &[
     "time: local machine timestamp and session label",
     "change: latest Yahoo regularMarketPrice vs chartPreviousClose, usually the prior regular-session close",
     "window: Yahoo chart range=5d interval=1d; this is a session/daily pulse, not a weekly return",
+];
+
+const REGIME_QUOTE_BASIS: &[&str] = &[
+    "time: local machine timestamp; regime is broader than today's pulse",
+    "change: latest Yahoo regularMarketPrice vs first available close in the chart window",
+    "window: Yahoo chart range=3mo interval=1wk; this is a 1-3 month regime read, not a trading signal",
 ];
 
 const SYMBOLS: &[(&str, &str, &str)] = &[
@@ -193,6 +213,7 @@ pub fn main_entry() {
 fn run(args: Vec<String>) -> Result<(), String> {
     match parse_command(&args)? {
         CommandKind::Now => now(&args),
+        CommandKind::Regime => regime(&args),
         CommandKind::Think => think(&args),
         CommandKind::Review => review(&args),
         CommandKind::Help => {
@@ -208,6 +229,7 @@ fn parse_command(args: &[String]) -> Result<CommandKind, String> {
     match args.first().map(String::as_str) {
         None => Ok(CommandKind::Now),
         Some("now") => Ok(CommandKind::Now),
+        Some("regime") => Ok(CommandKind::Regime),
         Some("think") => Ok(CommandKind::Think),
         Some("review") => Ok(CommandKind::Review),
         Some("help") | Some("--help") | Some("-h") => Ok(CommandKind::Help),
@@ -253,7 +275,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N]"
     );
 }
 
@@ -265,6 +287,16 @@ fn now(args: &[String]) -> Result<(), String> {
         append_event(&pulse_json(&pulse))?;
     }
     println!("{}", render_pulse(&pulse, compact));
+    Ok(())
+}
+
+fn regime(args: &[String]) -> Result<(), String> {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let regime = build_regime();
+    if !no_save {
+        append_event(&regime_json(&regime))?;
+    }
+    println!("{}", render_regime(&regime));
     Ok(())
 }
 
@@ -548,14 +580,87 @@ fn build_pulse() -> Pulse {
     }
 }
 
+fn build_regime() -> Regime {
+    let mut assets = Vec::new();
+    let mut failures = 0;
+    for (symbol, label, unit) in SYMBOLS {
+        match fetch_asset_window(symbol, label, unit, "3mo", "1wk", WindowChange::FirstClose) {
+            Ok(asset) => assets.push(asset),
+            Err(_) => {
+                failures += 1;
+                assets.push(Asset {
+                    symbol,
+                    label,
+                    unit,
+                    value: None,
+                    change: None,
+                    note: Some("regime data unavailable".into()),
+                });
+            }
+        }
+    }
+    let mut notes = vec![
+        "market regime uses Yahoo Finance chart endpoint via curl".to_string(),
+        "interpret as learning scaffold, not investment advice or a trading signal".to_string(),
+    ];
+    if failures > 0 {
+        notes.push(format!(
+            "{failures} quote(s) unavailable; regime read is partial"
+        ));
+    }
+    let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    let label = infer_regime_label(
+        avg_equity,
+        change_for(&assets, "DX-Y.NYB"),
+        change_for(&assets, "^TNX"),
+        change_for(&assets, "CL=F"),
+        change_for(&assets, "BTC-USD"),
+    );
+    let drivers = infer_regime_drivers(&assets);
+    let tensions = infer_regime_tensions(&assets, &label);
+    let checks = infer_regime_checks(&assets, &label);
+    let question = infer_regime_question(&label, &tensions);
+    Regime {
+        timestamp: timestamp(),
+        basis: REGIME_QUOTE_BASIS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        label,
+        assets,
+        drivers,
+        tensions,
+        checks,
+        question,
+        notes,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WindowChange {
+    PreviousClose,
+    FirstClose,
+}
+
 fn fetch_asset(
     symbol: &'static str,
     label: &'static str,
     unit: &'static str,
 ) -> Result<Asset, String> {
+    fetch_asset_window(symbol, label, unit, "5d", "1d", WindowChange::PreviousClose)
+}
+
+fn fetch_asset_window(
+    symbol: &'static str,
+    label: &'static str,
+    unit: &'static str,
+    range: &str,
+    interval: &str,
+    change_from: WindowChange,
+) -> Result<Asset, String> {
     let url = format!(
-        "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5d&interval=1d",
-        encode_symbol(symbol)
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?range={range}&interval={interval}",
+        encode_symbol(symbol),
     );
     let output = Command::new("curl")
         .args([
@@ -573,12 +678,13 @@ fn fetch_asset(
         return Err("curl failed".into());
     }
     let body = String::from_utf8_lossy(&output.stdout);
-    let value = number_after(&body, "\"regularMarketPrice\":")
-        .or_else(|| close_values(&body).last().copied());
-    let previous = number_after(&body, "\"chartPreviousClose\":").or_else(|| {
-        let vals = close_values(&body);
-        vals.get(vals.len().saturating_sub(2)).copied()
-    });
+    let closes = close_values(&body);
+    let value = number_after(&body, "\"regularMarketPrice\":").or_else(|| closes.last().copied());
+    let previous = match change_from {
+        WindowChange::PreviousClose => number_after(&body, "\"chartPreviousClose\":")
+            .or_else(|| closes.get(closes.len().saturating_sub(2)).copied()),
+        WindowChange::FirstClose => closes.first().copied(),
+    };
     let change = match (value, previous) {
         (Some(v), Some(p)) if p != 0.0 => Some(((v - p) / p) * 100.0),
         _ => None,
@@ -747,6 +853,146 @@ fn infer_concept(tensions: &[String], drivers: &[String]) -> String {
         "inflation impulse"
     } else {
         "risk-on / risk-off"
+    }
+    .into()
+}
+
+fn infer_regime_label(
+    avg_equity: f64,
+    usd: Option<f64>,
+    rates: Option<f64>,
+    oil: Option<f64>,
+    btc: Option<f64>,
+) -> String {
+    let macro_pressure = usd.is_some_and(|v| v > 1.0)
+        || rates.is_some_and(|v| v > 3.0)
+        || oil.is_some_and(|v| v > 8.0);
+    let high_beta = btc.is_some_and(|v| v > 10.0);
+    if avg_equity > 5.0 && !macro_pressure {
+        "risk-on / growth-led regime"
+    } else if avg_equity > 2.0 && macro_pressure {
+        "equity resilience under macro pressure"
+    } else if avg_equity < -3.0 && macro_pressure {
+        "macro-pressure / de-risking regime"
+    } else if avg_equity < -3.0 {
+        "risk-off / earnings-growth doubt"
+    } else if high_beta && avg_equity >= 0.0 {
+        "liquidity-sensitive high-beta regime"
+    } else {
+        "mixed / transition regime"
+    }
+    .into()
+}
+
+fn infer_regime_drivers(assets: &[Asset]) -> Vec<String> {
+    let mut drivers = Vec::new();
+    if change_for(assets, "^IXIC").is_some_and(|v| v > 5.0) {
+        drivers.push("Nasdaq strength suggests growth/AI leadership is part of the regime".into());
+    }
+    if avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).is_some_and(|v| v > 4.0) {
+        drivers.push("Equity indexes are broadly higher over the regime window".into());
+    }
+    if change_for(assets, "DX-Y.NYB").is_some_and(|v| v > 1.0)
+        || change_for(assets, "KRW=X").is_some_and(|v| v > 1.0)
+    {
+        drivers.push("Dollar/FX strength is a macro pressure channel to keep checking".into());
+    }
+    if change_for(assets, "^TNX").is_some_and(|v| v > 3.0) {
+        drivers.push(
+            "US 10Y yields are higher over the window, so discount-rate pressure matters".into(),
+        );
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v > 8.0) {
+        drivers.push("Oil is higher enough to keep inflation and margin narratives alive".into());
+    }
+    if change_for(assets, "GC=F").is_some_and(|v| v > 5.0) {
+        drivers.push(
+            "Gold strength points to hedge demand, liquidity concern, or real-rate debate".into(),
+        );
+    }
+    if change_for(assets, "BTC-USD").is_some_and(|v| v > 10.0) {
+        drivers.push("BTC strength suggests high-beta liquidity appetite is active".into());
+    }
+    if drivers.is_empty() {
+        drivers
+            .push("No single 1-3 month driver dominates; treat the regime as transitionary".into());
+        drivers
+            .push("Compare equities, yields, dollar, and oil before trusting one headline".into());
+    }
+    drivers.truncate(5);
+    drivers
+}
+
+fn infer_regime_tensions(assets: &[Asset], label: &str) -> Vec<String> {
+    let mut tensions = Vec::new();
+    let avg_equity = avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    if avg_equity > 2.0
+        && (change_for(assets, "^TNX").is_some_and(|v| v > 3.0)
+            || change_for(assets, "DX-Y.NYB").is_some_and(|v| v > 1.0))
+    {
+        tensions.push("equity strength vs tighter financial-condition signals".into());
+    }
+    if change_for(assets, "^IXIC").unwrap_or(0.0) - change_for(assets, "^KS11").unwrap_or(0.0) > 5.0
+    {
+        tensions.push("US growth leadership vs Korea/EM follow-through".into());
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v > 8.0) && avg_equity > 0.0 {
+        tensions.push("risk appetite vs oil/inflation impulse".into());
+    }
+    if change_for(assets, "GC=F").is_some_and(|v| v > 5.0) && avg_equity > 0.0 {
+        tensions.push("risk-on equities vs defensive/hedge demand in gold".into());
+    }
+    if label.contains("transition") {
+        tensions.push("short-term pulse may disagree with the 1-3 month backdrop".into());
+    }
+    if tensions.is_empty() {
+        tensions.push("headline trend vs cross-asset confirmation".into());
+    }
+    tensions.truncate(4);
+    tensions
+}
+
+fn infer_regime_checks(assets: &[Asset], label: &str) -> Vec<String> {
+    let mut checks = Vec::new();
+    if label.contains("resilience") || label.contains("pressure") {
+        checks.push(
+            "Check whether yields and dollar are rising for the same reason or different reasons"
+                .into(),
+        );
+    }
+    if change_for(assets, "^IXIC").is_some() && change_for(assets, "^GSPC").is_some() {
+        checks.push(
+            "Compare Nasdaq vs S&P 500 to separate growth leadership from broad risk appetite"
+                .into(),
+        );
+    }
+    if change_for(assets, "^KS11").is_some() {
+        checks.push(
+            "Check whether Korea/KOSPI confirms the US story or lags because of FX/EM pressure"
+                .into(),
+        );
+    }
+    if change_for(assets, "CL=F").is_some() {
+        checks.push(
+            "Watch oil: if it keeps rising, inflation narratives can change the regime label"
+                .into(),
+        );
+    }
+    checks.push("Ask what evidence would force you to rename this regime next week".into());
+    checks.truncate(5);
+    checks
+}
+
+fn infer_regime_question(label: &str, tensions: &[String]) -> String {
+    let text = format!("{label} {}", tensions.join(" ")).to_lowercase();
+    if text.contains("macro pressure") || text.contains("financial-condition") {
+        "Is equity strength absorbing macro pressure, or has the market not priced it yet?"
+    } else if text.contains("growth") || text.contains("nasdaq") {
+        "Is this regime broad risk-on, or mostly growth/AI leadership?"
+    } else if text.contains("transition") {
+        "What single cross-asset signal would prove the regime is changing?"
+    } else {
+        "Which asset best confirms the 1-3 month regime, and which asset disagrees?"
     }
     .into()
 }
@@ -1150,6 +1396,68 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
     out
 }
 
+fn render_regime(r: &Regime) -> String {
+    let mut out = format!(
+        "Market Regime · {}\n\nRegime\n  {}\n\nBasis\n",
+        r.timestamp, r.label
+    );
+    for b in &r.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str("\n1-3M Asset Map\n");
+    for a in &r.assets {
+        let value = a
+            .value
+            .map(|v| {
+                format!(
+                    "{v:.2}{}",
+                    if a.unit.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(" {}", a.unit)
+                    }
+                )
+            })
+            .unwrap_or_else(|| "n/a".into());
+        let change = a
+            .change
+            .map(|c| format!("{:+.2}%", c))
+            .unwrap_or_else(|| "n/a".into());
+        let note = a
+            .note
+            .as_ref()
+            .map(|n| format!(" · {n}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  - {}: {} ({}){}\n",
+            a.label, value, change, note
+        ));
+    }
+    out.push_str("\nRegime drivers\n");
+    for (i, d) in r.drivers.iter().enumerate() {
+        out.push_str(&format!("  {}. {}\n", i + 1, d));
+    }
+    out.push_str("\nRegime tensions\n");
+    for t in &r.tensions {
+        out.push_str(&format!("  - {t}\n"));
+    }
+    out.push_str("\nChecks for next session/week\n");
+    for c in &r.checks {
+        out.push_str(&format!("  - {c}\n"));
+    }
+    out.push_str(&format!(
+        "\nNext better regime question\n  {}\n\nBoundary\n  Market literacy only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions.\n",
+        r.question
+    ));
+    if !r.notes.is_empty() {
+        out.push_str("\nSource notes\n");
+        for n in &r.notes {
+            out.push_str(&format!("  - {n}\n"));
+        }
+    }
+    out
+}
+
 fn question_seeds_for(p: &Pulse) -> Vec<String> {
     let text = format!(
         "{} {} {}",
@@ -1413,6 +1721,10 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
         .iter()
         .filter(|l| l.contains("\"type\":\"thought\""))
         .count();
+    let regimes = events
+        .iter()
+        .filter(|l| l.contains("\"type\":\"regime\""))
+        .count();
     let inquiries = events
         .iter()
         .filter(|l| l.contains("\"type\":\"inquiry\""))
@@ -1457,7 +1769,7 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
     counts.sort_by(|a, b| b.1.cmp(&a.1));
     thesis_types.sort();
     thesis_types.dedup();
-    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), pulses, inquiries, research_inquiries, thoughts, feedback);
+    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), pulses, regimes, inquiries, research_inquiries, thoughts, feedback);
     let mut wrote = false;
     for (tag, count) in counts.into_iter().filter(|(_, c)| *c > 0).take(6) {
         wrote = true;
@@ -1487,6 +1799,16 @@ fn pulse_json(p: &Pulse) -> String {
         esc(&p.mood),
         esc(&p.question),
         esc(&p.concept)
+    )
+}
+
+fn regime_json(r: &Regime) -> String {
+    format!(
+        "{{\"type\":\"regime\",\"timestamp\":\"{}\",\"basis\":\"{}\",\"label\":\"{}\",\"question\":\"{}\"}}",
+        esc(&r.timestamp),
+        esc(&r.basis.join(" | ")),
+        esc(&r.label),
+        esc(&r.question)
     )
 }
 
@@ -1606,6 +1928,14 @@ mod tests {
         );
         assert!(parse_command(&["ask".into()]).is_err());
         assert!(parse_command(&["--bad".into()]).is_err());
+    }
+
+    #[test]
+    fn routes_regime_to_regime_command() {
+        assert_eq!(
+            parse_command(&["regime".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Regime
+        );
     }
 
     #[test]
@@ -1919,6 +2249,50 @@ mod tests {
         assert!(rendered.contains("not a weekly return"));
     }
 
+    #[test]
+    fn regime_renders_timeframe_basis_and_boundaries() {
+        let regime = compose_test_regime(vec![
+            Asset {
+                symbol: "^IXIC",
+                label: "Nasdaq",
+                unit: "",
+                value: Some(100.0),
+                change: Some(8.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^GSPC",
+                label: "S&P 500",
+                unit: "",
+                value: Some(100.0),
+                change: Some(4.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^TNX",
+                label: "US 10Y",
+                unit: "%",
+                value: Some(4.8),
+                change: Some(4.0),
+                note: None,
+            },
+            Asset {
+                symbol: "DX-Y.NYB",
+                label: "DXY",
+                unit: "",
+                value: Some(105.0),
+                change: Some(1.2),
+                note: None,
+            },
+        ]);
+        assert!(regime.label.contains("resilience") || regime.label.contains("risk-on"));
+        let rendered = render_regime(&regime);
+        assert!(rendered.contains("Market Regime"));
+        assert!(rendered.contains("1-3 month regime read"));
+        assert!(rendered.contains("Next better regime question"));
+        assert!(rendered.contains("not investment advice"));
+    }
+
     fn compose_test_pulse(assets: Vec<Asset>) -> Pulse {
         let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
         let mood = infer_mood(
@@ -1936,6 +2310,33 @@ mod tests {
             question: infer_question(&tensions, &mood),
             concept: infer_concept(&tensions, &drivers),
             mood,
+            assets,
+            drivers,
+            tensions,
+            notes: vec![],
+        }
+    }
+
+    fn compose_test_regime(assets: Vec<Asset>) -> Regime {
+        let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+        let label = infer_regime_label(
+            avg_equity,
+            change_for(&assets, "DX-Y.NYB"),
+            change_for(&assets, "^TNX"),
+            change_for(&assets, "CL=F"),
+            change_for(&assets, "BTC-USD"),
+        );
+        let drivers = infer_regime_drivers(&assets);
+        let tensions = infer_regime_tensions(&assets, &label);
+        Regime {
+            timestamp: timestamp(),
+            basis: REGIME_QUOTE_BASIS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            question: infer_regime_question(&label, &tensions),
+            checks: infer_regime_checks(&assets, &label),
+            label,
             assets,
             drivers,
             tensions,

@@ -38,8 +38,8 @@ Adapters should call the standalone `mp` CLI instead of making the core depend o
 
 Planned or current adapters:
 
-- Codex skill: `$mp <question>`, `$mp ask ...`, `$mp research ...`, `$mp now`, `$mp think ...`, `$mp review`
-- Claude Code slash command: `/mp <question>`, `/mp ask ...`, `/mp research ...`, `/mp now`, `/mp think ...`, `/mp review`
+- Codex skill: `$mp <question>`, `$mp ask ...`, `$mp research ...`, `$mp now`, `$mp regime`, `$mp think ...`, `$mp review`
+- Claude Code slash command: `/mp <question>`, `/mp ask ...`, `/mp research ...`, `/mp now`, `/mp regime`, `/mp think ...`, `/mp review`
 - OMX hook: optional compact pulse at session start or long task completion
 - tmux popup/status: optional compact pulse
 - cron/launchd: optional scheduled snapshots
