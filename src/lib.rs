@@ -196,8 +196,8 @@ enum CommandKind {
 
 const PULSE_QUOTE_BASIS: &[&str] = &[
     "time: local machine timestamp and session label",
-    "change: latest Yahoo regularMarketPrice vs chartPreviousClose/fallback prior daily close",
-    "window: Yahoo chart range=5d interval=1d; quote-session pulse, not exact 24h, calendar-day, or weekly return",
+    "change: latest Yahoo daily close value vs prior daily close; regularMarketPrice is fallback only",
+    "window: Yahoo chart range=5d interval=1d; close-to-close pulse, not high/low gap, exact 24h, or weekly return",
 ];
 
 const REGIME_QUOTE_BASIS: &[&str] = &[
@@ -989,7 +989,7 @@ fn build_regime() -> Regime {
 
 #[derive(Clone, Debug)]
 enum WindowChange {
-    PreviousClose,
+    PriorDailyClose,
     FirstClose,
     FirstMatchingDate(Vec<String>),
 }
@@ -999,7 +999,14 @@ fn fetch_asset(
     label: &'static str,
     unit: &'static str,
 ) -> Result<Asset, String> {
-    fetch_asset_window(symbol, label, unit, "5d", "1d", WindowChange::PreviousClose)
+    fetch_asset_window(
+        symbol,
+        label,
+        unit,
+        "5d",
+        "1d",
+        WindowChange::PriorDailyClose,
+    )
 }
 
 fn fetch_asset_window(
@@ -1031,15 +1038,7 @@ fn fetch_asset_window(
     }
     let body = String::from_utf8_lossy(&output.stdout);
     let closes = close_values(&body);
-    let value = number_after(&body, "\"regularMarketPrice\":").or_else(|| closes.last().copied());
-    let previous = match change_from {
-        WindowChange::PreviousClose => number_after(&body, "\"chartPreviousClose\":")
-            .or_else(|| closes.get(closes.len().saturating_sub(2)).copied()),
-        WindowChange::FirstClose => closes.first().copied(),
-        WindowChange::FirstMatchingDate(dates) => first_close_for_dates(&body, &dates)
-            .or_else(|| number_after(&body, "\"chartPreviousClose\":"))
-            .or_else(|| closes.last().copied()),
-    };
+    let (value, previous) = value_and_previous_for_window(&body, &closes, &change_from);
     let change = match (value, previous) {
         (Some(v), Some(p)) if p != 0.0 => Some(((v - p) / p) * 100.0),
         _ => None,
@@ -1052,6 +1051,37 @@ fn fetch_asset_window(
         change,
         note: None,
     })
+}
+
+fn value_and_previous_for_window(
+    body: &str,
+    closes: &[f64],
+    change_from: &WindowChange,
+) -> (Option<f64>, Option<f64>) {
+    let market_price = || number_after(body, "\"regularMarketPrice\":");
+    let latest_close = || closes.last().copied();
+    let prior_close = || {
+        closes
+            .len()
+            .checked_sub(2)
+            .and_then(|i| closes.get(i))
+            .copied()
+    };
+
+    let value = match change_from {
+        WindowChange::PriorDailyClose => latest_close().or_else(market_price),
+        _ => market_price().or_else(latest_close),
+    };
+    let previous = match change_from {
+        WindowChange::PriorDailyClose => {
+            prior_close().or_else(|| number_after(body, "\"chartPreviousClose\":"))
+        }
+        WindowChange::FirstClose => closes.first().copied(),
+        WindowChange::FirstMatchingDate(dates) => first_close_for_dates(body, dates)
+            .or_else(|| number_after(body, "\"chartPreviousClose\":"))
+            .or_else(|| closes.last().copied()),
+    };
+    (value, previous)
 }
 
 fn encode_symbol(symbol: &str) -> String {
@@ -3584,8 +3614,22 @@ mod tests {
         let rendered = render_pulse(&p, false);
         assert!(rendered.contains("Market puzzle / question seeds"));
         assert!(rendered.contains("Basis"));
-        assert!(rendered.contains("quote-session pulse"));
-        assert!(rendered.contains("not exact 24h, calendar-day, or weekly return"));
+        assert!(rendered.contains("close-to-close pulse"));
+        assert!(rendered.contains("not high/low gap, exact 24h, or weekly return"));
+    }
+
+    #[test]
+    fn now_change_prefers_daily_close_series_over_market_quote() {
+        let body = r#"{"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110,121]}]}}"#;
+
+        let (value, previous) = value_and_previous_for_window(
+            body,
+            &close_values(body),
+            &WindowChange::PriorDailyClose,
+        );
+
+        assert_eq!(value, Some(121.0));
+        assert_eq!(previous, Some(110.0));
     }
 
     #[test]
