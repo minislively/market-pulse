@@ -1354,9 +1354,8 @@ fn infer_week_questions(assets: &[Asset], label: &str, tensions: &[String]) -> V
         push_tag(&mut tags, "oil");
     }
     let mut questions = validation_questions(&tags);
-    questions.push(
-        "By next Friday, what evidence would force you to rename this week’s market story?".into(),
-    );
+    questions
+        .push("By next Friday, what evidence would force you to rename this week’s story?".into());
     let mut unique = Vec::new();
     for question in questions {
         if !unique.contains(&question) {
@@ -1782,35 +1781,40 @@ fn push_tag(tags: &mut Vec<&'static str>, tag: &'static str) {
 fn validation_questions(tags: &[&str]) -> Vec<String> {
     let mut v = Vec::new();
     if tags.contains(&"rates") && tags.contains(&"semis") {
-        v.push("What evidence would prove growth leadership is absorbing rate pressure rather than just ignoring it for one session?".into());
-        v.push("What would falsify the rates/growth story: higher yields with semis still leading, or lower yields with weak breadth?".into());
-        v.push("What alternative fits the same tape better: earnings momentum, liquidity, positioning, or genuine easing expectations?".into());
-    } else if tags.contains(&"rates") {
+        v.push("What evidence shows growth leadership is absorbing rate pressure?".into());
+        v.push("What would falsify the rates/growth story: higher yields with weak breadth, or lower yields without growth leadership?".into());
         v.push(
-            "What would confirm this is easing expectations rather than growth-scare bond buying?"
+            "What alternative fits: earnings, liquidity, positioning, or genuine easing hopes?"
                 .into(),
         );
-        v.push("What would falsify the rates story if yields, dollar, and growth assets stop confirming each other?".into());
+    } else if tags.contains(&"rates") {
+        v.push("What confirms easing hopes rather than growth-scare bond buying?".into());
+        v.push(
+            "What falsifies the rates story if yields, dollar, and growth stop lining up?".into(),
+        );
     }
     if tags.contains(&"fx") && tags.contains(&"korea") {
-        v.push("What evidence would show FX is driving Korea risk rather than only translating a global move?".into());
-        v.push("What would falsify the FX-pressure read: KRW weakness without foreign selling, or exporters offsetting the drag?".into());
+        v.push("What evidence shows FX is driving Korea risk?".into());
+        v.push("What falsifies FX pressure: weak KRW without foreign selling, or exporters offsetting it?".into());
     } else if tags.contains(&"fx") {
-        v.push("What would prove dollar strength is a market-wide liquidity signal rather than a local currency move?".into());
+        v.push("What proves dollar strength is a market-wide liquidity signal?".into());
     }
     if tags.contains(&"oil") {
-        v.push("What evidence would show oil is changing inflation expectations instead of staying sector-specific?".into());
+        v.push("What evidence shows oil is changing inflation expectations?".into());
     }
     if tags.contains(&"event") {
-        v.push("What should move first if the IPO/listing/event explanation is actually driving the session?".into());
-        v.push("What would falsify the event story: broad assets moving before the event, or unrelated sectors leading?".into());
+        v.push("What should move first if the IPO/listing story is driving the session?".into());
+        v.push("What falsifies the event story: broad assets moving first, or unrelated sectors leading?".into());
     }
     if tags.contains(&"positioning") {
-        v.push("What would distinguish positioning or flow from a real change in growth, rates, or earnings expectations?".into());
+        v.push(
+            "What distinguishes positioning/flow from real changes in growth, rates, or earnings?"
+                .into(),
+        );
     }
     if v.is_empty() {
-        v.push("What evidence would confirm this interpretation, and what single observation would make it wrong?".into());
-        v.push("What alternative explanation could fit the same price action without forcing a one-cause story?".into());
+        v.push("What evidence confirms this view, and what observation makes it wrong?".into());
+        v.push("What alternative explains the same tape without a one-cause story?".into());
     }
     let mut unique = Vec::new();
     for question in v {
@@ -1848,26 +1852,26 @@ fn tags_from_summary(summary: &JournalSummary, limit: usize) -> Vec<&'static str
 fn recall_question(query: &str, filter: &str, tags: &[&str]) -> String {
     if tags.contains(&"rates") {
         return format!(
-            "In {filter}, were your old \"{query}\" notes assuming easing, growth scare, or rate pressure—and which current yield/dollar move would falsify that read?"
+            "In {filter}, did old \"{query}\" notes assume easing, growth scare, or rate pressure—and which yield/dollar move would falsify that read?"
         );
     }
     if tags.contains(&"fx") || tags.contains(&"korea") {
         return format!(
-            "In {filter}, did \"{query}\" mean global dollar pressure, Korea-specific stress, or sector rotation—and what current evidence would disprove it?"
+            "In {filter}, did \"{query}\" mean global dollar pressure, Korea stress, or sector rotation—and what evidence disproves it?"
         );
     }
     if tags.contains(&"event") || tags.contains(&"positioning") {
         return format!(
-            "In {filter}, was \"{query}\" an event/flow explanation or a durable market signal—and what would prove that old read was just timing noise?"
+            "In {filter}, was \"{query}\" event/flow or durable signal—and what proves the old read was timing noise?"
         );
     }
     if tags.contains(&"oil") {
         return format!(
-            "In {filter}, did \"{query}\" point to inflation pressure, demand, or sector rotation—and what would falsify that channel now?"
+            "In {filter}, did \"{query}\" mean inflation, demand, or sector rotation—and what falsifies that channel now?"
         );
     }
     format!(
-        "In {filter}, what changed since you last wrote about \"{query}\", and what evidence would falsify that old interpretation now?"
+        "In {filter}, what changed since \"{query}\", and what evidence falsifies that old interpretation now?"
     )
 }
 
@@ -1879,7 +1883,7 @@ fn review_drill(summary: &JournalSummary) -> String {
         tags.join(" + ")
     };
     format!(
-        "\nSuggested drill\n  For the next 3 notes, run a validation loop on {focus}:\n  1. claim: what market story am I telling?\n  2. confirming evidence: which asset/event should move next if I am right?\n  3. alternative: what else could explain the same tape?\n  4. falsifier: what observation would make me rename the view?"
+        "\nSuggested drill\n  For the next 3 notes, run a validation loop on {focus}:\n  1. claim: what story am I telling?\n  2. evidence: what should move next if I am right?\n  3. alternative: what else explains the same tape?\n  4. falsifier: what would make me rename the view?"
     )
 }
 
