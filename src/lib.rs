@@ -20,12 +20,38 @@ struct Asset {
 struct Pulse {
     timestamp: String,
     session: String,
+    basis: Vec<String>,
     mood: String,
     assets: Vec<Asset>,
     drivers: Vec<String>,
     tensions: Vec<String>,
     question: String,
     concept: String,
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct Regime {
+    timestamp: String,
+    basis: Vec<String>,
+    label: String,
+    assets: Vec<Asset>,
+    drivers: Vec<String>,
+    tensions: Vec<String>,
+    checks: Vec<String>,
+    question: String,
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct Weekly {
+    timestamp: String,
+    basis: Vec<String>,
+    label: String,
+    assets: Vec<Asset>,
+    drivers: Vec<String>,
+    tensions: Vec<String>,
+    questions: Vec<String>,
     notes: Vec<String>,
 }
 
@@ -157,12 +183,28 @@ struct Feedback {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandKind {
     Now,
+    Week,
+    Calendar,
+    Regime,
     Think,
     Review,
+    Find,
     Help,
     Inquiry { text: String, no_save: bool },
     Research { text: String, no_save: bool },
 }
+
+const PULSE_QUOTE_BASIS: &[&str] = &[
+    "time: local machine timestamp and session label",
+    "change: latest Yahoo daily close value vs prior daily close; regularMarketPrice is fallback only",
+    "window: Yahoo chart range=5d interval=1d; close-to-close pulse, not high/low gap, exact 24h, or weekly return",
+];
+
+const REGIME_QUOTE_BASIS: &[&str] = &[
+    "time: local machine timestamp; regime is broader than today's pulse",
+    "change: latest Yahoo weekly close value vs first available weekly close; regularMarketPrice is fallback only",
+    "window: Yahoo chart range=3mo interval=1wk; this is a 1-3 month regime read, not a trading signal",
+];
 
 const SYMBOLS: &[(&str, &str, &str)] = &[
     ("^GSPC", "S&P 500", ""),
@@ -186,8 +228,12 @@ pub fn main_entry() {
 fn run(args: Vec<String>) -> Result<(), String> {
     match parse_command(&args)? {
         CommandKind::Now => now(&args),
+        CommandKind::Week => week(&args),
+        CommandKind::Calendar => calendar(&args),
+        CommandKind::Regime => regime(&args),
         CommandKind::Think => think(&args),
         CommandKind::Review => review(&args),
+        CommandKind::Find => find(&args),
         CommandKind::Help => {
             print_help();
             Ok(())
@@ -201,8 +247,12 @@ fn parse_command(args: &[String]) -> Result<CommandKind, String> {
     match args.first().map(String::as_str) {
         None => Ok(CommandKind::Now),
         Some("now") => Ok(CommandKind::Now),
+        Some("week") | Some("weekly") => Ok(CommandKind::Week),
+        Some("calendar") | Some("cal") => Ok(CommandKind::Calendar),
+        Some("regime") => Ok(CommandKind::Regime),
         Some("think") => Ok(CommandKind::Think),
         Some("review") => Ok(CommandKind::Review),
+        Some("find") | Some("search") => Ok(CommandKind::Find),
         Some("help") | Some("--help") | Some("-h") => Ok(CommandKind::Help),
         Some("ask") => inquiry_command(&args[1..], "`mp ask` needs a question"),
         Some("research") => research_command(&args[1..], "`mp research` needs a question"),
@@ -246,7 +296,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]"
     );
 }
 
@@ -258,6 +308,32 @@ fn now(args: &[String]) -> Result<(), String> {
         append_event(&pulse_json(&pulse))?;
     }
     println!("{}", render_pulse(&pulse, compact));
+    Ok(())
+}
+
+fn week(args: &[String]) -> Result<(), String> {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let weekly = build_week();
+    let events = read_week_events(120);
+    if !no_save {
+        append_event(&week_json(&weekly, events.len()))?;
+    }
+    println!("{}", render_week(&weekly, &events));
+    Ok(())
+}
+
+fn regime(args: &[String]) -> Result<(), String> {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let regime = build_regime();
+    if !no_save {
+        append_event(&regime_json(&regime))?;
+    }
+    println!("{}", render_regime(&regime));
+    Ok(())
+}
+
+fn calendar(_args: &[String]) -> Result<(), String> {
+    println!("{}", render_calendar());
     Ok(())
 }
 
@@ -473,8 +549,15 @@ fn research_source_from_json_line(line: &str) -> Option<ResearchSource> {
     })
 }
 
+#[derive(Clone, Debug)]
+enum ReviewFilter {
+    Date(String),
+    Dates { label: String, dates: Vec<String> },
+}
+
 fn review(args: &[String]) -> Result<(), String> {
     let mut limit = 80usize;
+    let mut filter: Option<ReviewFilter> = None;
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--limit" {
@@ -484,11 +567,255 @@ fn review(args: &[String]) -> Result<(), String> {
                     .map_err(|_| "--limit must be a number".to_string())?;
             }
             i += 1;
+        } else if args[i] == "--date" {
+            let Some(raw) = args.get(i + 1) else {
+                return Err("--date needs YYYY-MM-DD".into());
+            };
+            validate_review_date(raw)?;
+            set_review_filter(&mut filter, ReviewFilter::Date(raw.clone()))?;
+            i += 1;
+        } else if matches!(args[i].as_str(), "--days" | "--ago" | "--days-ago") {
+            let Some(raw) = args.get(i + 1) else {
+                return Err(format!("{} needs a number of days", args[i]));
+            };
+            let days = parse_review_days_ago(raw)?;
+            set_review_filter(&mut filter, ReviewFilter::Date(date_for_days_ago(days)?))?;
+            i += 1;
+        } else if matches!(
+            args[i].as_str(),
+            "--today" | "--yesterday" | "--this-week" | "--last-week"
+        ) {
+            set_review_filter(&mut filter, review_filter_for_alias(&args[i])?)?;
         }
         i += 1;
     }
-    println!("{}", render_review(limit));
+    let rendered = if let Some(filter) = filter {
+        render_review_for_filter(limit, &filter)
+    } else {
+        render_review(limit)
+    };
+    println!("{rendered}");
     Ok(())
+}
+
+fn find(args: &[String]) -> Result<(), String> {
+    let parsed = parse_find_args(args)?;
+    let rendered = render_find(parsed.limit, &parsed.query, parsed.filter.as_ref());
+    println!("{rendered}");
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct FindArgs {
+    query: String,
+    limit: usize,
+    filter: Option<ReviewFilter>,
+}
+
+fn parse_find_args(args: &[String]) -> Result<FindArgs, String> {
+    let mut limit = 20usize;
+    let mut filter: Option<ReviewFilter> = None;
+    let mut query_parts = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--limit" {
+            let Some(raw) = args.get(i + 1) else {
+                return Err("--limit needs a number".into());
+            };
+            limit = raw
+                .parse()
+                .map_err(|_| "--limit must be a number".to_string())?;
+            i += 2;
+            continue;
+        }
+        if args[i] == "--date" {
+            let Some(raw) = args.get(i + 1) else {
+                return Err("--date needs YYYY-MM-DD".into());
+            };
+            validate_review_date(raw)?;
+            set_review_filter(&mut filter, ReviewFilter::Date(raw.clone()))?;
+            i += 2;
+            continue;
+        }
+        if matches!(args[i].as_str(), "--days" | "--ago" | "--days-ago") {
+            let Some(raw) = args.get(i + 1) else {
+                return Err(format!("{} needs a number of days", args[i]));
+            };
+            let days = parse_review_days_ago(raw)?;
+            set_review_filter(&mut filter, ReviewFilter::Date(date_for_days_ago(days)?))?;
+            i += 2;
+            continue;
+        }
+        if matches!(
+            args[i].as_str(),
+            "--today" | "--yesterday" | "--this-week" | "--last-week"
+        ) {
+            set_review_filter(&mut filter, review_filter_for_alias(&args[i])?)?;
+            i += 1;
+            continue;
+        }
+        if args[i].starts_with('-') {
+            return Err(format!("unknown find option '{}'", args[i]));
+        }
+        query_parts.push(args[i].clone());
+        i += 1;
+    }
+    let query = query_parts.join(" ").trim().to_string();
+    if query.is_empty() {
+        return Err("`mp find` needs a journal search query".into());
+    }
+    Ok(FindArgs {
+        query,
+        limit,
+        filter,
+    })
+}
+
+fn set_review_filter(filter: &mut Option<ReviewFilter>, next: ReviewFilter) -> Result<(), String> {
+    if filter.is_some() {
+        return Err("use only one review date selector".into());
+    }
+    *filter = Some(next);
+    Ok(())
+}
+
+fn review_filter_for_alias(alias: &str) -> Result<ReviewFilter, String> {
+    match alias {
+        "--today" => Ok(ReviewFilter::Date(date_for_days_ago(0)?)),
+        "--yesterday" => Ok(ReviewFilter::Date(date_for_days_ago(1)?)),
+        "--this-week" => {
+            let dates = current_week_date_prefixes();
+            Ok(ReviewFilter::Dates {
+                label: format!("this-week {}", week_window_label(&dates)),
+                dates,
+            })
+        }
+        "--last-week" => {
+            let dates = last_week_date_prefixes();
+            Ok(ReviewFilter::Dates {
+                label: format!("last-week {}", week_window_label(&dates)),
+                dates,
+            })
+        }
+        _ => Err(format!("unknown review period alias '{alias}'")),
+    }
+}
+
+fn parse_review_days_ago(raw: &str) -> Result<u32, String> {
+    let days = raw
+        .parse::<u32>()
+        .map_err(|_| "--days must be a non-negative whole number".to_string())?;
+    if days <= 3660 {
+        Ok(days)
+    } else {
+        Err("--days must be 3660 days or less".into())
+    }
+}
+
+fn date_for_days_ago(days: u32) -> Result<String, String> {
+    if days == 0 {
+        return command_date(&["+%Y-%m-%d"])
+            .ok_or_else(|| "--days needs the local `date` command".into());
+    }
+    let bsd_offset = format!("-v-{days}d");
+    if let Some(date) = command_date(&[&bsd_offset, "+%Y-%m-%d"]) {
+        return Ok(date);
+    }
+    let gnu_relative = format!("{days} days ago");
+    command_date(&["-d", &gnu_relative, "+%Y-%m-%d"])
+        .ok_or_else(|| "--days needs BSD `date -v` or GNU `date -d` support".into())
+}
+
+fn current_week_date_prefixes() -> Vec<String> {
+    let Some(weekday) = iso_weekday() else {
+        return date_prefixes_for_days(7);
+    };
+    let mut dates = (0..weekday)
+        .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+        .collect::<Vec<_>>();
+    dates.reverse();
+    dates
+}
+
+fn last_week_date_prefixes() -> Vec<String> {
+    let Some(weekday) = iso_weekday() else {
+        let mut dates = (7..14)
+            .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+            .collect::<Vec<_>>();
+        dates.reverse();
+        return dates;
+    };
+    let mut dates = (weekday..weekday + 7)
+        .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+        .collect::<Vec<_>>();
+    dates.reverse();
+    dates
+}
+
+fn iso_weekday() -> Option<u32> {
+    command_date_raw(&["+%u"])
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|day| (1..=7).contains(day))
+}
+
+fn week_basis(dates: &[String]) -> Vec<String> {
+    let window = week_window_label(dates);
+    vec![
+        format!("time: local machine timestamp; current-week window {window}; weekly is a learning loop, not a trading signal"),
+        "market window: Yahoo chart range=1mo interval=1d; change is latest daily close vs first close matching the current local week; regularMarketPrice is fallback only, and assets without a current-week close fall back to the latest available close".into(),
+        format!("journal window: current local calendar week {window}, filtered before the weekly card is saved"),
+    ]
+}
+
+fn week_window_label(dates: &[String]) -> String {
+    match (dates.first(), dates.last()) {
+        (Some(first), Some(last)) if first == last => first.clone(),
+        (Some(first), Some(last)) => format!("{first}..{last}"),
+        _ => "unavailable".into(),
+    }
+}
+
+fn date_for_unix_timestamp(seconds: i64) -> Option<String> {
+    let raw = seconds.to_string();
+    command_date(&["-r", &raw, "+%Y-%m-%d"]).or_else(|| {
+        let gnu_timestamp = format!("@{raw}");
+        command_date(&["-d", &gnu_timestamp, "+%Y-%m-%d"])
+    })
+}
+
+fn command_date(args: &[&str]) -> Option<String> {
+    let date = command_date_raw(args)?;
+    validate_review_date(&date).ok()?;
+    Some(date)
+}
+
+fn command_date_raw(args: &[&str]) -> Option<String> {
+    let output = Command::new("date").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
+}
+
+fn validate_review_date(date: &str) -> Result<(), String> {
+    let bytes = date.as_bytes();
+    let shape_valid = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+    if !shape_valid {
+        return Err("--date must use YYYY-MM-DD".into());
+    }
+    let month = date[5..7].parse::<u32>().unwrap_or(0);
+    let day = date[8..10].parse::<u32>().unwrap_or(0);
+    if (1..=12).contains(&month) && (1..=31).contains(&day) {
+        Ok(())
+    } else {
+        Err("--date must be a valid YYYY-MM-DD date".into())
+    }
 }
 
 fn build_pulse() -> Pulse {
@@ -510,7 +837,11 @@ fn build_pulse() -> Pulse {
             }
         }
     }
-    let mut notes = vec!["market quotes from Yahoo Finance chart endpoint via curl".to_string()];
+    let mut notes = vec![
+        "market quotes from Yahoo Finance chart endpoint via curl".to_string(),
+        "mixed sessions: US indices, Korea, FX, futures, and crypto can have different clocks; compare directionally"
+            .to_string(),
+    ];
     if failures > 0 {
         notes.push(format!(
             "{failures} quote(s) unavailable; kept the learning loop alive"
@@ -530,6 +861,7 @@ fn build_pulse() -> Pulse {
     Pulse {
         timestamp: timestamp(),
         session: session(),
+        basis: PULSE_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
         mood,
         assets,
         drivers,
@@ -540,14 +872,154 @@ fn build_pulse() -> Pulse {
     }
 }
 
+fn build_week() -> Weekly {
+    let mut assets = Vec::new();
+    let mut failures = 0;
+    let week_dates = current_week_date_prefixes();
+    for (symbol, label, unit) in SYMBOLS {
+        match fetch_asset_window(
+            symbol,
+            label,
+            unit,
+            "1mo",
+            "1d",
+            WindowChange::FirstMatchingDate(week_dates.clone()),
+        ) {
+            Ok(asset) => assets.push(asset),
+            Err(_) => {
+                failures += 1;
+                assets.push(Asset {
+                    symbol,
+                    label,
+                    unit,
+                    value: None,
+                    change: None,
+                    note: Some("weekly data unavailable".into()),
+                });
+            }
+        }
+    }
+    let mut notes = vec![
+        "weekly market window uses Yahoo Finance chart endpoint via curl".to_string(),
+        "weekly journal window uses the current local calendar week".to_string(),
+    ];
+    if failures > 0 {
+        notes.push(format!(
+            "{failures} quote(s) unavailable; weekly read is partial"
+        ));
+    }
+    let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    let label = infer_week_label(
+        avg_equity,
+        change_for(&assets, "DX-Y.NYB"),
+        change_for(&assets, "^TNX"),
+        change_for(&assets, "CL=F"),
+        change_for(&assets, "BTC-USD"),
+    );
+    let drivers = infer_week_drivers(&assets);
+    let tensions = infer_week_tensions(&assets, &label);
+    let questions = infer_week_questions(&assets, &label, &tensions);
+    Weekly {
+        timestamp: timestamp(),
+        basis: week_basis(&week_dates),
+        label,
+        assets,
+        drivers,
+        tensions,
+        questions,
+        notes,
+    }
+}
+
+fn build_regime() -> Regime {
+    let mut assets = Vec::new();
+    let mut failures = 0;
+    for (symbol, label, unit) in SYMBOLS {
+        match fetch_asset_window(symbol, label, unit, "3mo", "1wk", WindowChange::FirstClose) {
+            Ok(asset) => assets.push(asset),
+            Err(_) => {
+                failures += 1;
+                assets.push(Asset {
+                    symbol,
+                    label,
+                    unit,
+                    value: None,
+                    change: None,
+                    note: Some("regime data unavailable".into()),
+                });
+            }
+        }
+    }
+    let mut notes = vec![
+        "market regime uses Yahoo Finance chart endpoint via curl".to_string(),
+        "interpret as learning scaffold, not investment advice or a trading signal".to_string(),
+    ];
+    if failures > 0 {
+        notes.push(format!(
+            "{failures} quote(s) unavailable; regime read is partial"
+        ));
+    }
+    let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    let label = infer_regime_label(
+        avg_equity,
+        change_for(&assets, "DX-Y.NYB"),
+        change_for(&assets, "^TNX"),
+        change_for(&assets, "CL=F"),
+        change_for(&assets, "BTC-USD"),
+    );
+    let drivers = infer_regime_drivers(&assets);
+    let tensions = infer_regime_tensions(&assets, &label);
+    let checks = infer_regime_checks(&assets, &label);
+    let question = infer_regime_question(&label, &tensions);
+    Regime {
+        timestamp: timestamp(),
+        basis: REGIME_QUOTE_BASIS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        label,
+        assets,
+        drivers,
+        tensions,
+        checks,
+        question,
+        notes,
+    }
+}
+
+#[derive(Clone, Debug)]
+enum WindowChange {
+    PriorDailyClose,
+    FirstClose,
+    FirstMatchingDate(Vec<String>),
+}
+
 fn fetch_asset(
     symbol: &'static str,
     label: &'static str,
     unit: &'static str,
 ) -> Result<Asset, String> {
+    fetch_asset_window(
+        symbol,
+        label,
+        unit,
+        "5d",
+        "1d",
+        WindowChange::PriorDailyClose,
+    )
+}
+
+fn fetch_asset_window(
+    symbol: &'static str,
+    label: &'static str,
+    unit: &'static str,
+    range: &str,
+    interval: &str,
+    change_from: WindowChange,
+) -> Result<Asset, String> {
     let url = format!(
-        "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5d&interval=1d",
-        encode_symbol(symbol)
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?range={range}&interval={interval}",
+        encode_symbol(symbol),
     );
     let output = Command::new("curl")
         .args([
@@ -565,12 +1037,8 @@ fn fetch_asset(
         return Err("curl failed".into());
     }
     let body = String::from_utf8_lossy(&output.stdout);
-    let value = number_after(&body, "\"regularMarketPrice\":")
-        .or_else(|| close_values(&body).last().copied());
-    let previous = number_after(&body, "\"chartPreviousClose\":").or_else(|| {
-        let vals = close_values(&body);
-        vals.get(vals.len().saturating_sub(2)).copied()
-    });
+    let closes = close_values(&body);
+    let (value, previous) = value_and_previous_for_window(&body, &closes, &change_from);
     let change = match (value, previous) {
         (Some(v), Some(p)) if p != 0.0 => Some(((v - p) / p) * 100.0),
         _ => None,
@@ -583,6 +1051,38 @@ fn fetch_asset(
         change,
         note: None,
     })
+}
+
+fn value_and_previous_for_window(
+    body: &str,
+    closes: &[f64],
+    change_from: &WindowChange,
+) -> (Option<f64>, Option<f64>) {
+    let market_price = || number_after(body, "\"regularMarketPrice\":");
+    let latest_close = || closes.last().copied();
+    let prior_close = || {
+        closes
+            .len()
+            .checked_sub(2)
+            .and_then(|i| closes.get(i))
+            .copied()
+    };
+
+    let value = match change_from {
+        WindowChange::PriorDailyClose
+        | WindowChange::FirstClose
+        | WindowChange::FirstMatchingDate(_) => latest_close().or_else(market_price),
+    };
+    let previous = match change_from {
+        WindowChange::PriorDailyClose => {
+            prior_close().or_else(|| number_after(body, "\"chartPreviousClose\":"))
+        }
+        WindowChange::FirstClose => closes.first().copied(),
+        WindowChange::FirstMatchingDate(dates) => {
+            first_close_for_dates(body, dates).or_else(|| closes.last().copied())
+        }
+    };
+    (value, previous)
 }
 
 fn encode_symbol(symbol: &str) -> String {
@@ -613,6 +1113,34 @@ fn close_values(text: &str) -> Vec<f64> {
         .split(',')
         .filter_map(|v| v.parse().ok())
         .collect()
+}
+
+fn timestamp_values(text: &str) -> Vec<i64> {
+    let Some(start_key) = text.find("\"timestamp\":[") else {
+        return vec![];
+    };
+    let start = start_key + "\"timestamp\":[".len();
+    let Some(end) = text[start..].find(']') else {
+        return vec![];
+    };
+    text[start..start + end]
+        .split(',')
+        .filter_map(|v| v.parse().ok())
+        .collect()
+}
+
+fn first_close_for_dates(text: &str, dates: &[String]) -> Option<f64> {
+    if dates.is_empty() {
+        return None;
+    }
+    timestamp_values(text)
+        .into_iter()
+        .zip(close_values(text))
+        .find_map(|(ts, close)| {
+            date_for_unix_timestamp(ts)
+                .filter(|date| dates.iter().any(|d| d == date))
+                .map(|_| close)
+        })
 }
 
 fn avg_change(assets: &[Asset], symbols: &[&str]) -> Option<f64> {
@@ -743,6 +1271,276 @@ fn infer_concept(tensions: &[String], drivers: &[String]) -> String {
     .into()
 }
 
+fn infer_week_label(
+    avg_equity: f64,
+    usd: Option<f64>,
+    rates: Option<f64>,
+    oil: Option<f64>,
+    btc: Option<f64>,
+) -> String {
+    let macro_pressure = usd.is_some_and(|v| v > 0.7)
+        || rates.is_some_and(|v| v > 1.5)
+        || oil.is_some_and(|v| v > 4.0);
+    let high_beta = btc.is_some_and(|v| v > 5.0);
+    if avg_equity > 1.5 && !macro_pressure {
+        "risk-on learning week"
+    } else if avg_equity > 0.5 && macro_pressure {
+        "equity resilience vs macro-pressure week"
+    } else if avg_equity < -1.5 && macro_pressure {
+        "de-risking / macro-pressure week"
+    } else if avg_equity < -1.5 {
+        "risk-off / growth-doubt week"
+    } else if high_beta && avg_equity >= 0.0 {
+        "high-beta liquidity watch week"
+    } else {
+        "mixed / transition learning week"
+    }
+    .into()
+}
+
+fn infer_week_drivers(assets: &[Asset]) -> Vec<String> {
+    let mut drivers = Vec::new();
+    if change_for(assets, "^IXIC").is_some_and(|v| v > 1.5) {
+        drivers.push("Nasdaq strength is the first place to test growth/AI leadership".into());
+    }
+    if avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).is_some_and(|v| v > 1.2) {
+        drivers.push("Equities are broadly higher over the weekly window".into());
+    }
+    if change_for(assets, "DX-Y.NYB").is_some_and(|v| v.abs() > 0.7)
+        || change_for(assets, "KRW=X").is_some_and(|v| v.abs() > 0.7)
+    {
+        drivers.push("Dollar/FX moved enough to check whether liquidity pressure mattered".into());
+    }
+    if change_for(assets, "^TNX").is_some_and(|v| v.abs() > 1.5) {
+        drivers.push("US 10Y yield moved enough to test the rates-vs-growth story".into());
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v.abs() > 4.0) {
+        drivers.push(
+            "Oil moved enough to keep inflation/margin narratives in the weekly review".into(),
+        );
+    }
+    if change_for(assets, "BTC-USD").is_some_and(|v| v.abs() > 5.0) {
+        drivers.push("BTC/high beta moved enough to check liquidity appetite".into());
+    }
+    if drivers.is_empty() {
+        drivers.push(
+            "No single weekly driver dominates; use the journal themes to choose what to study"
+                .into(),
+        );
+        drivers
+            .push("Compare equities, rates, dollar, oil, and your own repeated questions".into());
+    }
+    drivers.truncate(5);
+    drivers
+}
+
+fn infer_week_tensions(assets: &[Asset], label: &str) -> Vec<String> {
+    let mut tensions = Vec::new();
+    let avg_equity = avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    if avg_equity > 0.5
+        && (change_for(assets, "^TNX").is_some_and(|v| v > 1.5)
+            || change_for(assets, "DX-Y.NYB").is_some_and(|v| v > 0.7))
+    {
+        tensions.push("weekly equity strength vs tighter financial-condition signals".into());
+    }
+    if change_for(assets, "^IXIC").unwrap_or(0.0) - change_for(assets, "^GSPC").unwrap_or(0.0) > 1.0
+    {
+        tensions.push("Nasdaq/growth leadership vs broad-market confirmation".into());
+    }
+    if change_for(assets, "^KS11").unwrap_or(0.0) < avg_equity - 1.0 {
+        tensions.push("Korea/EM follow-through vs US market story".into());
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v > 4.0) && avg_equity > 0.0 {
+        tensions.push("risk appetite vs oil/inflation impulse".into());
+    }
+    if label.contains("transition") {
+        tensions.push("this week's pulse may not match the broader regime".into());
+    }
+    if tensions.is_empty() {
+        tensions.push("headline weekly move vs cross-asset confirmation".into());
+    }
+    tensions.truncate(4);
+    tensions
+}
+
+fn infer_week_questions(assets: &[Asset], label: &str, tensions: &[String]) -> Vec<String> {
+    let text = format!("{label} {}", tensions.join(" ")).to_lowercase();
+    let mut tags = detect_tags(&text);
+    if text.contains("financial-condition")
+        || text.contains("rates")
+        || change_for(assets, "^TNX").is_some()
+    {
+        push_tag(&mut tags, "rates");
+    }
+    if text.contains("nasdaq") || text.contains("growth") || text.contains("ai") {
+        push_tag(&mut tags, "semis");
+    }
+    if text.contains("korea") || change_for(assets, "^KS11").is_some() {
+        push_tag(&mut tags, "korea");
+    }
+    if text.contains("fx")
+        || text.contains("dollar")
+        || change_for(assets, "DX-Y.NYB").is_some()
+        || change_for(assets, "KRW=X").is_some()
+    {
+        push_tag(&mut tags, "fx");
+    }
+    if text.contains("oil") || change_for(assets, "CL=F").is_some_and(|v| v.abs() > 4.0) {
+        push_tag(&mut tags, "oil");
+    }
+    let mut questions = validation_questions(&tags);
+    questions
+        .push("By next Friday, what evidence would force you to rename this week’s story?".into());
+    let mut unique = Vec::new();
+    for question in questions {
+        if !unique.contains(&question) {
+            unique.push(question);
+        }
+    }
+    unique.truncate(5);
+    unique
+}
+
+fn infer_regime_label(
+    avg_equity: f64,
+    usd: Option<f64>,
+    rates: Option<f64>,
+    oil: Option<f64>,
+    btc: Option<f64>,
+) -> String {
+    let macro_pressure = usd.is_some_and(|v| v > 1.0)
+        || rates.is_some_and(|v| v > 3.0)
+        || oil.is_some_and(|v| v > 8.0);
+    let high_beta = btc.is_some_and(|v| v > 10.0);
+    if avg_equity > 5.0 && !macro_pressure {
+        "risk-on / growth-led regime"
+    } else if avg_equity > 2.0 && macro_pressure {
+        "equity resilience under macro pressure"
+    } else if avg_equity < -3.0 && macro_pressure {
+        "macro-pressure / de-risking regime"
+    } else if avg_equity < -3.0 {
+        "risk-off / earnings-growth doubt"
+    } else if high_beta && avg_equity >= 0.0 {
+        "liquidity-sensitive high-beta regime"
+    } else {
+        "mixed / transition regime"
+    }
+    .into()
+}
+
+fn infer_regime_drivers(assets: &[Asset]) -> Vec<String> {
+    let mut drivers = Vec::new();
+    if change_for(assets, "^IXIC").is_some_and(|v| v > 5.0) {
+        drivers.push("Nasdaq strength suggests growth/AI leadership is part of the regime".into());
+    }
+    if avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).is_some_and(|v| v > 4.0) {
+        drivers.push("Equity indexes are broadly higher over the regime window".into());
+    }
+    if change_for(assets, "DX-Y.NYB").is_some_and(|v| v > 1.0)
+        || change_for(assets, "KRW=X").is_some_and(|v| v > 1.0)
+    {
+        drivers.push("Dollar/FX strength is a macro pressure channel to keep checking".into());
+    }
+    if change_for(assets, "^TNX").is_some_and(|v| v > 3.0) {
+        drivers.push(
+            "US 10Y yields are higher over the window, so discount-rate pressure matters".into(),
+        );
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v > 8.0) {
+        drivers.push("Oil is higher enough to keep inflation and margin narratives alive".into());
+    }
+    if change_for(assets, "GC=F").is_some_and(|v| v > 5.0) {
+        drivers.push(
+            "Gold strength points to hedge demand, liquidity concern, or real-rate debate".into(),
+        );
+    }
+    if change_for(assets, "BTC-USD").is_some_and(|v| v > 10.0) {
+        drivers.push("BTC strength suggests high-beta liquidity appetite is active".into());
+    }
+    if drivers.is_empty() {
+        drivers
+            .push("No single 1-3 month driver dominates; treat the regime as transitionary".into());
+        drivers
+            .push("Compare equities, yields, dollar, and oil before trusting one headline".into());
+    }
+    drivers.truncate(5);
+    drivers
+}
+
+fn infer_regime_tensions(assets: &[Asset], label: &str) -> Vec<String> {
+    let mut tensions = Vec::new();
+    let avg_equity = avg_change(assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+    if avg_equity > 2.0
+        && (change_for(assets, "^TNX").is_some_and(|v| v > 3.0)
+            || change_for(assets, "DX-Y.NYB").is_some_and(|v| v > 1.0))
+    {
+        tensions.push("equity strength vs tighter financial-condition signals".into());
+    }
+    if change_for(assets, "^IXIC").unwrap_or(0.0) - change_for(assets, "^KS11").unwrap_or(0.0) > 5.0
+    {
+        tensions.push("US growth leadership vs Korea/EM follow-through".into());
+    }
+    if change_for(assets, "CL=F").is_some_and(|v| v > 8.0) && avg_equity > 0.0 {
+        tensions.push("risk appetite vs oil/inflation impulse".into());
+    }
+    if change_for(assets, "GC=F").is_some_and(|v| v > 5.0) && avg_equity > 0.0 {
+        tensions.push("risk-on equities vs defensive/hedge demand in gold".into());
+    }
+    if label.contains("transition") {
+        tensions.push("short-term pulse may disagree with the 1-3 month backdrop".into());
+    }
+    if tensions.is_empty() {
+        tensions.push("headline trend vs cross-asset confirmation".into());
+    }
+    tensions.truncate(4);
+    tensions
+}
+
+fn infer_regime_checks(assets: &[Asset], label: &str) -> Vec<String> {
+    let mut checks = Vec::new();
+    if label.contains("resilience") || label.contains("pressure") {
+        checks.push(
+            "Check whether yields and dollar are rising for the same reason or different reasons"
+                .into(),
+        );
+    }
+    if change_for(assets, "^IXIC").is_some() && change_for(assets, "^GSPC").is_some() {
+        checks.push(
+            "Compare Nasdaq vs S&P 500 to separate growth leadership from broad risk appetite"
+                .into(),
+        );
+    }
+    if change_for(assets, "^KS11").is_some() {
+        checks.push(
+            "Check whether Korea/KOSPI confirms the US story or lags because of FX/EM pressure"
+                .into(),
+        );
+    }
+    if change_for(assets, "CL=F").is_some() {
+        checks.push(
+            "Watch oil: if it keeps rising, inflation narratives can change the regime label"
+                .into(),
+        );
+    }
+    checks.push("Ask what evidence would force you to rename this regime next week".into());
+    checks.truncate(5);
+    checks
+}
+
+fn infer_regime_question(label: &str, tensions: &[String]) -> String {
+    let text = format!("{label} {}", tensions.join(" ")).to_lowercase();
+    if text.contains("macro pressure") || text.contains("financial-condition") {
+        "Is equity strength absorbing macro pressure, or has the market not priced it yet?"
+    } else if text.contains("growth") || text.contains("nasdaq") {
+        "Is this regime broad risk-on, or mostly growth/AI leadership?"
+    } else if text.contains("transition") {
+        "What single cross-asset signal would prove the regime is changing?"
+    } else {
+        "Which asset best confirms the 1-3 month regime, and which asset disagrees?"
+    }
+    .into()
+}
+
 fn detect_tags(text: &str) -> Vec<&'static str> {
     let lower = text.to_lowercase();
     let mut tags = Vec::new();
@@ -835,7 +1633,7 @@ fn make_inquiry(question: &str, linked: Option<String>) -> Inquiry {
         explanations: possible_explanations(&tags),
         evidence: evidence_checks(&tags),
         counter: counters(&tags),
-        next_question: next_better_question(&tags),
+        next_question: next_better_question_for(&tags, question),
         concepts: concepts(&tags),
         thesis_type,
     }
@@ -929,7 +1727,7 @@ fn make_feedback(text: &str, linked: Option<String>) -> Feedback {
         good: good(&tags),
         check: evidence_checks(&tags),
         counter: counters(&tags),
-        next: next_questions(&tags),
+        next: next_questions_for(&tags, text),
         concepts: concepts(&tags),
     }
 }
@@ -1009,37 +1807,212 @@ fn counters(tags: &[&str]) -> Vec<String> {
     v
 }
 
-fn next_questions(tags: &[&str]) -> Vec<String> {
-    let mut v = Vec::new();
-    if tags.contains(&"rates") && tags.contains(&"semis") {
-        v.push("If yields rise further, do semis still outperform the broad market?".into());
-    } else if tags.contains(&"rates") {
-        v.push("If this is really easing expectations, should growth assets, the dollar, and yields confirm together?".into());
+fn push_tag(tags: &mut Vec<&'static str>, tag: &'static str) {
+    if !tags.contains(&tag) {
+        tags.push(tag);
     }
-    if tags.contains(&"fx") && tags.contains(&"korea") {
-        v.push("Does KRW weakness coincide with foreign selling, or are exporters offsetting the pressure?".into());
-    }
-    if tags.contains(&"oil") {
-        v.push("Is oil moving enough to change inflation expectations, or is it only a sector input today?".into());
-    }
-    if tags.contains(&"event") {
-        v.push("What market segment should move first if the IPO/event explanation is actually driving the session?".into());
-    }
-    if tags.contains(&"positioning") {
-        v.push("What would distinguish positioning from a real change in growth, rates, or earnings expectations?".into());
-    }
-    if v.is_empty() {
-        v.push(
-            "What would you need to see by the close to say this interpretation was wrong?".into(),
-        );
-    }
-    v
 }
 
-fn next_better_question(tags: &[&str]) -> String {
-    next_questions(tags).into_iter().next().unwrap_or_else(|| {
-        "What evidence would make this market interpretation wrong by the close?".into()
+fn contains_hangul(text: &str) -> bool {
+    text.chars().any(|ch| {
+        ('가'..='힣').contains(&ch) || ('ㄱ'..='ㅎ').contains(&ch) || ('ㅏ'..='ㅣ').contains(&ch)
     })
+}
+
+fn validation_questions_for(tags: &[&str], korean: bool) -> Vec<String> {
+    if korean {
+        return korean_validation_questions(tags);
+    }
+    english_validation_questions(tags)
+}
+
+fn korean_validation_questions(tags: &[&str]) -> Vec<String> {
+    let mut v = Vec::new();
+    if tags.contains(&"rates") && tags.contains(&"semis") {
+        v.push("성장주 강세가 금리 부담을 흡수한다는 증거는 뭐지?".into());
+        v.push("이 금리/성장주 해석을 틀리게 만들 신호는 뭐지?".into());
+        v.push("실적, 유동성, 수급, 완화 기대 중 대안가설은 뭐지?".into());
+    } else if tags.contains(&"rates") {
+        v.push("완화 기대인지 성장 둔화 매수인지 구분할 증거는 뭐지?".into());
+        v.push("금리·달러·성장주가 엇갈리면 이 해석은 어떻게 깨지지?".into());
+    }
+    if tags.contains(&"fx") && tags.contains(&"korea") {
+        v.push("환율이 한국 리스크를 주도한다는 증거는 뭐지?".into());
+        v.push("원화 약세에도 외국인 매도나 지수 약세가 없으면 어떻게 볼까?".into());
+    } else if tags.contains(&"fx") {
+        v.push("달러 강세가 전반적 유동성 신호라는 증거는 뭐지?".into());
+    }
+    if tags.contains(&"oil") {
+        v.push("유가가 인플레 기대를 바꾸고 있다는 증거는 뭐지?".into());
+    }
+    if tags.contains(&"event") {
+        v.push("상장/이벤트가 원인이면 어떤 자산이 먼저 움직여야 하지?".into());
+        v.push("이벤트 설명을 틀리게 만들 반대 신호는 뭐지?".into());
+    }
+    if tags.contains(&"positioning") {
+        v.push("수급/포지셔닝과 진짜 펀더멘털 변화를 어떻게 구분하지?".into());
+    }
+    if v.is_empty() {
+        v.push("이 해석을 확인할 증거와 틀리게 만들 관찰은 뭐지?".into());
+        v.push("같은 움직임을 설명할 다른 가설은 뭐지?".into());
+    }
+    dedupe_and_limit(v, 4)
+}
+
+fn english_validation_questions(tags: &[&str]) -> Vec<String> {
+    let mut v = Vec::new();
+    if tags.contains(&"rates") && tags.contains(&"semis") {
+        v.push("What evidence shows growth leadership is absorbing rate pressure?".into());
+        v.push("What would falsify the rates/growth story: higher yields with weak breadth, or lower yields without growth leadership?".into());
+        v.push(
+            "What alternative fits: earnings, liquidity, positioning, or genuine easing hopes?"
+                .into(),
+        );
+    } else if tags.contains(&"rates") {
+        v.push("What confirms easing hopes rather than growth-scare bond buying?".into());
+        v.push(
+            "What falsifies the rates story if yields, dollar, and growth stop lining up?".into(),
+        );
+    }
+    if tags.contains(&"fx") && tags.contains(&"korea") {
+        v.push("What evidence shows FX is driving Korea risk?".into());
+        v.push("What falsifies FX pressure: weak KRW without foreign selling, or exporters offsetting it?".into());
+    } else if tags.contains(&"fx") {
+        v.push("What proves dollar strength is a market-wide liquidity signal?".into());
+    }
+    if tags.contains(&"oil") {
+        v.push("What evidence shows oil is changing inflation expectations?".into());
+    }
+    if tags.contains(&"event") {
+        v.push("What should move first if the IPO/listing story is driving the session?".into());
+        v.push("What falsifies the event story: broad assets moving first, or unrelated sectors leading?".into());
+    }
+    if tags.contains(&"positioning") {
+        v.push(
+            "What distinguishes positioning/flow from real changes in growth, rates, or earnings?"
+                .into(),
+        );
+    }
+    if v.is_empty() {
+        v.push("What evidence confirms this view, and what observation makes it wrong?".into());
+        v.push("What alternative explains the same tape without a one-cause story?".into());
+    }
+    dedupe_and_limit(v, 4)
+}
+
+fn dedupe_and_limit(questions: Vec<String>, limit: usize) -> Vec<String> {
+    let mut unique = Vec::new();
+    for question in questions {
+        if !unique.contains(&question) {
+            unique.push(question);
+        }
+    }
+    unique.truncate(limit);
+    unique
+}
+
+fn validation_questions(tags: &[&str]) -> Vec<String> {
+    validation_questions_for(tags, false)
+}
+
+fn next_questions_for(tags: &[&str], source_text: &str) -> Vec<String> {
+    validation_questions_for(tags, contains_hangul(source_text))
+}
+
+fn next_better_question_for(tags: &[&str], source_text: &str) -> String {
+    validation_questions_for(tags, contains_hangul(source_text))
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| {
+            if contains_hangul(source_text) {
+                "이 해석을 확인할 증거와 틀리게 만들 관찰은 뭐지?".into()
+            } else {
+                "What evidence would confirm this interpretation, and what would make it wrong?"
+                    .into()
+            }
+        })
+}
+
+fn tags_from_summary(summary: &JournalSummary, limit: usize) -> Vec<&'static str> {
+    summary
+        .tag_counts
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .take(limit)
+        .map(|(tag, _)| *tag)
+        .collect()
+}
+
+fn recall_question(query: &str, filter: &str, tags: &[&str]) -> String {
+    if contains_hangul(query) {
+        if tags.contains(&"rates") {
+            return format!(
+                "기간({filter}) 기준으로 예전 \"{query}\" 메모는 완화 기대/성장 둔화/금리 부담 중 뭐였고, 어떤 금리·달러 움직임이 그 해석을 깨지?"
+            );
+        }
+        if tags.contains(&"fx") || tags.contains(&"korea") {
+            return format!(
+                "기간({filter}) 기준으로 \"{query}\"는 달러 압력/한국 리스크/섹터 로테이션 중 뭐였고, 어떤 증거가 그 해석을 반박하지?"
+            );
+        }
+        if tags.contains(&"event") || tags.contains(&"positioning") {
+            return format!(
+                "기간({filter}) 기준으로 \"{query}\"는 이벤트·수급인지 지속 신호인지, 무엇이 시간차 노이즈였음을 보여주지?"
+            );
+        }
+        if tags.contains(&"oil") {
+            return format!(
+                "기간({filter}) 기준으로 \"{query}\"는 인플레/수요/섹터 회전 중 뭐였고, 무엇이 그 경로를 깨지?"
+            );
+        }
+        return format!(
+            "기간({filter}) 기준으로 \"{query}\"를 썼던 때와 지금 무엇이 달라졌고, 어떤 증거가 그 해석을 깨지?"
+        );
+    }
+    if tags.contains(&"rates") {
+        return format!(
+            "In {filter}, did old \"{query}\" notes assume easing, growth scare, or rate pressure—and which yield/dollar move would falsify that read?"
+        );
+    }
+    if tags.contains(&"fx") || tags.contains(&"korea") {
+        return format!(
+            "In {filter}, did \"{query}\" mean global dollar pressure, Korea stress, or sector rotation—and what evidence disproves it?"
+        );
+    }
+    if tags.contains(&"event") || tags.contains(&"positioning") {
+        return format!(
+            "In {filter}, was \"{query}\" event/flow or durable signal—and what proves the old read was timing noise?"
+        );
+    }
+    if tags.contains(&"oil") {
+        return format!(
+            "In {filter}, did \"{query}\" mean inflation, demand, or sector rotation—and what falsifies that channel now?"
+        );
+    }
+    format!(
+        "In {filter}, what changed since \"{query}\", and what evidence falsifies that old interpretation now?"
+    )
+}
+
+fn review_drill(summary: &JournalSummary) -> String {
+    let tags = tags_from_summary(summary, 2);
+    let focus = if tags.is_empty() {
+        if summary.korean_entries > 0 {
+            "다음 반복 테마".to_string()
+        } else {
+            "your next repeated theme".to_string()
+        }
+    } else {
+        tags.join(" + ")
+    };
+    if summary.korean_entries > 0 {
+        return format!(
+            "\nSuggested drill\n  다음 3개 메모에서 {focus}를 검증 루프로 나눠보세요:\n  1. 주장: 내가 말하는 시장 스토리는?\n  2. 증거: 맞다면 다음에 무엇이 움직여야 하지?\n  3. 대안: 같은 흐름을 설명할 다른 가설은?\n  4. 반증: 무엇이 나오면 이 해석을 바꿔야 하지?"
+        );
+    }
+    format!(
+        "\nSuggested drill\n  For the next 3 notes, run a validation loop on {focus}:\n  1. claim: what story am I telling?\n  2. evidence: what should move next if I am right?\n  3. alternative: what else explains the same tape?\n  4. falsifier: what would make me rename the view?"
+    )
 }
 
 fn concepts(tags: &[&str]) -> Vec<String> {
@@ -1082,9 +2055,13 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
         );
     }
     let mut out = format!(
-        "Market Pulse · {} · {}\n\nMood\n  {}\n\nAssets\n",
+        "Market Pulse · {} · {}\n\nMood\n  {}\n\nBasis\n",
         p.timestamp, p.session, p.mood
     );
+    for b in &p.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str("\nAssets\n");
     for a in &p.assets {
         let value = a
             .value
@@ -1132,6 +2109,160 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
     if !p.notes.is_empty() {
         out.push_str("\nSource notes\n");
         for n in &p.notes {
+            out.push_str(&format!("  - {n}\n"));
+        }
+    }
+    out
+}
+
+fn render_regime(r: &Regime) -> String {
+    let mut out = format!(
+        "Market Regime · {}\n\nRegime\n  {}\n\nBasis\n",
+        r.timestamp, r.label
+    );
+    for b in &r.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str("\n1-3M Asset Map\n");
+    for a in &r.assets {
+        let value = a
+            .value
+            .map(|v| {
+                format!(
+                    "{v:.2}{}",
+                    if a.unit.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(" {}", a.unit)
+                    }
+                )
+            })
+            .unwrap_or_else(|| "n/a".into());
+        let change = a
+            .change
+            .map(|c| format!("{:+.2}%", c))
+            .unwrap_or_else(|| "n/a".into());
+        let note = a
+            .note
+            .as_ref()
+            .map(|n| format!(" · {n}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  - {}: {} ({}){}\n",
+            a.label, value, change, note
+        ));
+    }
+    out.push_str("\nRegime drivers\n");
+    for (i, d) in r.drivers.iter().enumerate() {
+        out.push_str(&format!("  {}. {}\n", i + 1, d));
+    }
+    out.push_str("\nRegime tensions\n");
+    for t in &r.tensions {
+        out.push_str(&format!("  - {t}\n"));
+    }
+    out.push_str("\nChecks for next session/week\n");
+    for c in &r.checks {
+        out.push_str(&format!("  - {c}\n"));
+    }
+    out.push_str(&format!(
+        "\nNext better regime question\n  {}\n\nBoundary\n  Market literacy only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions.\n",
+        r.question
+    ));
+    if !r.notes.is_empty() {
+        out.push_str("\nSource notes\n");
+        for n in &r.notes {
+            out.push_str(&format!("  - {n}\n"));
+        }
+    }
+    out
+}
+
+fn render_week(w: &Weekly, events: &[String]) -> String {
+    let summary = summarize_events(events);
+    let mut out = format!(
+        "Weekly Market Pulse · {}\n\nWeek story\n  {}\n\nBasis\n",
+        w.timestamp, w.label
+    );
+    for b in &w.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str("\n1W Asset Map\n");
+    for a in &w.assets {
+        let value = a
+            .value
+            .map(|v| {
+                format!(
+                    "{v:.2}{}",
+                    if a.unit.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(" {}", a.unit)
+                    }
+                )
+            })
+            .unwrap_or_else(|| "n/a".into());
+        let change = a
+            .change
+            .map(|c| format!("{:+.2}%", c))
+            .unwrap_or_else(|| "n/a".into());
+        let note = a
+            .note
+            .as_ref()
+            .map(|n| format!(" · {n}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  - {}: {} ({}){}\n",
+            a.label, value, change, note
+        ));
+    }
+    out.push_str("\nWeekly market themes\n");
+    for (i, d) in w.drivers.iter().enumerate() {
+        out.push_str(&format!("  {}. {}\n", i + 1, d));
+    }
+    out.push_str("\nWeekly tensions\n");
+    for t in &w.tensions {
+        out.push_str(&format!("  - {t}\n"));
+    }
+    out.push_str(&format!(
+        "\nThis week's learning loop\n  Entries scanned: {} · pulses {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n",
+        events.len(),
+        summary.pulses,
+        summary.regimes,
+        summary.inquiries,
+        summary.research_inquiries,
+        summary.thoughts,
+        summary.feedback
+    ));
+    out.push_str("\nRecurring journal themes\n");
+    let mut wrote_themes = false;
+    for (tag, count) in summary
+        .tag_counts
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .take(5)
+    {
+        wrote_themes = true;
+        out.push_str(&format!("  - {tag}: {count}\n"));
+    }
+    if !wrote_themes {
+        out.push_str("  - Not enough tagged questions/thoughts this week yet\n");
+    }
+    out.push_str("\nQuestion / thesis habits\n");
+    if summary.thesis_types.is_empty() {
+        out.push_str("  - Ask or think at least once this week to build a visible pattern.\n");
+    } else {
+        for thesis in summary.thesis_types.iter().take(4) {
+            out.push_str(&format!("  - You used a {thesis} lens.\n"));
+        }
+    }
+    out.push_str("\nNext week check questions\n");
+    for q in &w.questions {
+        out.push_str(&format!("  - {q}\n"));
+    }
+    out.push_str("\nWeekly drill\n  Pick one repeated theme above and write one falsifiable `mp think` note before the next `mp-week`.\n\nBoundary\n  Market literacy only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions.\n");
+    if !w.notes.is_empty() {
+        out.push_str("\nSource notes\n");
+        for n in &w.notes {
             out.push_str(&format!("  - {n}\n"));
         }
     }
@@ -1296,6 +2427,37 @@ fn render_feedback(f: &Feedback) -> String {
     out
 }
 
+fn render_calendar() -> String {
+    let today = date_for_days_ago(0).unwrap_or_else(|_| "unavailable".into());
+    let yesterday = date_for_days_ago(1).unwrap_or_else(|_| "unavailable".into());
+    let this_week = current_week_date_prefixes();
+    let last_week = last_week_date_prefixes();
+    let mut out = format!(
+        "Market Pulse Calendar · {}\n\nLocal date windows\n",
+        timestamp()
+    );
+    out.push_str(&format!("  - today: {today}\n"));
+    out.push_str(&format!("  - yesterday: {yesterday}\n"));
+    out.push_str(&format!(
+        "  - this-week: {}\n",
+        week_window_label(&this_week)
+    ));
+    out.push_str(&format!(
+        "  - last-week: {}\n",
+        week_window_label(&last_week)
+    ));
+    out.push_str(
+        "\nReview shortcuts\n  - mp review --today\n  - mp review --yesterday\n  - mp review --this-week\n  - mp review --last-week\n",
+    );
+    out.push_str(
+        "\nHow market-pulse uses these windows\n  - mp week uses the current local calendar week for journal review.\n  - mp week prices the market window from the first Yahoo close matching the current local week when available.\n  - mp review period aliases filter journal timestamp dates; they are not fuzzy full-text search.\n",
+    );
+    out.push_str(
+        "\nBoundary\n  Calendar windows are local-date helpers for market literacy, not exchange-holiday calendars or trading signals.\n",
+    );
+    out
+}
+
 fn journal_path() -> PathBuf {
     if let Ok(home) = env::var("MARKET_PULSE_HOME") {
         return PathBuf::from(home).join("journal.jsonl");
@@ -1321,15 +2483,84 @@ fn read_events(limit: usize) -> Vec<String> {
     let Ok(text) = fs::read_to_string(journal_path()) else {
         return Vec::new();
     };
-    let mut lines = text
-        .lines()
+    limit_events(read_event_lines(&text), limit)
+}
+
+fn read_week_events(limit: usize) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(journal_path()) else {
+        return Vec::new();
+    };
+    let events = read_event_lines(&text);
+    let dates = current_week_date_prefixes();
+    if dates.is_empty() {
+        return limit_events(events, limit);
+    }
+    filter_events_by_dates(events, &dates, limit)
+}
+
+fn read_event_lines(text: &str) -> Vec<String> {
+    text.lines()
         .filter(|l| !l.trim().is_empty())
         .map(str::to_string)
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn limit_events(mut lines: Vec<String>, limit: usize) -> Vec<String> {
     if lines.len() > limit {
         lines = lines.split_off(lines.len() - limit);
     }
     lines
+}
+
+fn read_events_for_date(limit: usize, date: &str) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(journal_path()) else {
+        return Vec::new();
+    };
+    filter_events_by_date(read_event_lines(&text), date, limit)
+}
+
+fn read_events_for_dates(limit: usize, dates: &[String]) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(journal_path()) else {
+        return Vec::new();
+    };
+    filter_events_by_dates(read_event_lines(&text), dates, limit)
+}
+
+fn read_events_for_filter(limit: usize, filter: Option<&ReviewFilter>) -> Vec<String> {
+    match filter {
+        Some(ReviewFilter::Date(date)) => read_events_for_date(limit, date),
+        Some(ReviewFilter::Dates { dates, .. }) => read_events_for_dates(limit, dates),
+        None => read_events(limit),
+    }
+}
+
+fn filter_events_by_date(events: Vec<String>, date: &str, limit: usize) -> Vec<String> {
+    let lines = events
+        .into_iter()
+        .filter(|l| event_matches_date(l, date))
+        .collect::<Vec<_>>();
+    limit_events(lines, limit)
+}
+
+fn filter_events_by_dates(events: Vec<String>, dates: &[String], limit: usize) -> Vec<String> {
+    let lines = events
+        .into_iter()
+        .filter(|l| {
+            json_field(l, "timestamp")
+                .is_some_and(|ts| dates.iter().any(|date| ts.starts_with(date)))
+        })
+        .collect::<Vec<_>>();
+    limit_events(lines, limit)
+}
+
+fn date_prefixes_for_days(days: u32) -> Vec<String> {
+    (0..days)
+        .filter_map(|days_ago| date_for_days_ago(days_ago).ok())
+        .collect()
+}
+
+fn event_matches_date(line: &str, date: &str) -> bool {
+    json_field(line, "timestamp").is_some_and(|ts| ts.starts_with(date))
 }
 
 fn latest_pulse_timestamp() -> Option<String> {
@@ -1389,31 +2620,181 @@ fn render_review(limit: usize) -> String {
     render_review_from_events(&events, &journal_path().display().to_string())
 }
 
-fn render_review_from_events(events: &[String], journal: &str) -> String {
-    if events.is_empty() {
-        return "No market-pulse journal entries yet. Start with `mp \"your market question\"`, then `mp think \"...\"`.".into();
+fn render_review_for_filter(limit: usize, filter: &ReviewFilter) -> String {
+    match filter {
+        ReviewFilter::Date(date) => render_review_for_date(limit, date),
+        ReviewFilter::Dates { label, dates } => render_review_for_dates(limit, label, dates),
     }
-    let pulses = events
+}
+
+fn render_review_for_date(limit: usize, date: &str) -> String {
+    let events = read_events_for_date(limit, date);
+    render_review_for_date_from_events(&events, &journal_path().display().to_string(), date)
+}
+
+fn render_review_for_dates(limit: usize, label: &str, dates: &[String]) -> String {
+    let events = read_events_for_dates(limit, dates);
+    render_review_for_dates_from_events(&events, &journal_path().display().to_string(), label)
+}
+
+fn render_find(limit: usize, query: &str, filter: Option<&ReviewFilter>) -> String {
+    let events = find_events(limit, query, filter);
+    render_find_from_events(
+        &events,
+        &journal_path().display().to_string(),
+        query,
+        filter_label(filter),
+    )
+}
+
+fn find_events(limit: usize, query: &str, filter: Option<&ReviewFilter>) -> Vec<String> {
+    let query = query.to_lowercase();
+    read_events_for_filter(usize::MAX, filter)
+        .into_iter()
+        .filter(|line| line.to_lowercase().contains(&query))
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn filter_label(filter: Option<&ReviewFilter>) -> String {
+    match filter {
+        Some(ReviewFilter::Date(date)) => format!("date {date}"),
+        Some(ReviewFilter::Dates { label, .. }) => label.clone(),
+        None => "all journal entries".into(),
+    }
+}
+
+fn render_review_for_date_from_events(events: &[String], journal: &str, date: &str) -> String {
+    if events.is_empty() {
+        return format!(
+            "No market-pulse journal entries found for {date}.\n\nJournal: {journal}\nTry `mp review --limit N` to inspect recent entries, or record one with `mp now`, `mp regime`, `mp ask`, or `mp think`."
+        );
+    }
+    let mut out = format!("Review date filter: {date}\n\n");
+    out.push_str(&render_review_from_events(events, journal));
+    out
+}
+
+fn render_review_for_dates_from_events(events: &[String], journal: &str, label: &str) -> String {
+    if events.is_empty() {
+        return format!(
+            "No market-pulse journal entries found for {label}.\n\nJournal: {journal}\nTry `mp calendar` to inspect available date windows, or record one with `mp now`, `mp week`, `mp ask`, or `mp think`."
+        );
+    }
+    let mut out = format!("Review period filter: {label}\n\n");
+    out.push_str(&render_review_from_events(events, journal));
+    out
+}
+
+fn render_find_from_events(
+    events: &[String],
+    journal: &str,
+    query: &str,
+    filter: String,
+) -> String {
+    if events.is_empty() {
+        return format!(
+            "No market-pulse journal entries matched \"{query}\".\n\nJournal: {journal}\nFilter: {filter}\nTry a simpler keyword, `mp calendar` for date windows, or record one with `mp ask`, `mp research`, or `mp think`."
+        );
+    }
+
+    let summary = summarize_events(events);
+    let mut out = format!(
+        "Market Pulse Find\n\nQuery: \"{query}\"\nFilter: {filter}\nJournal: {journal}\nEntries matched: {} · pulses {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nMatches\n",
+        events.len(),
+        summary.pulses,
+        summary.weeks,
+        summary.regimes,
+        summary.inquiries,
+        summary.research_inquiries,
+        summary.thoughts,
+        summary.feedback
+    );
+    for line in events.iter().rev().take(12) {
+        out.push_str(&format!("  - {}\n", event_recall_snippet(line, query)));
+    }
+
+    out.push_str("\nRecurring themes in matches\n");
+    let mut wrote_theme = false;
+    for (tag, count) in summary
+        .tag_counts
         .iter()
-        .filter(|l| l.contains("\"type\":\"pulse\""))
-        .count();
-    let thoughts = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"thought\""))
-        .count();
-    let inquiries = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"inquiry\""))
-        .count();
-    let research_inquiries = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"research_inquiry\""))
-        .count();
-    let feedback = events
-        .iter()
-        .filter(|l| l.contains("\"type\":\"feedback\""))
-        .count();
-    let mut counts: Vec<(&str, usize)> = vec![
+        .filter(|(_, count)| *count > 0)
+        .take(4)
+    {
+        wrote_theme = true;
+        out.push_str(&format!("  - {tag}: {count}\n"));
+    }
+    if !wrote_theme {
+        out.push_str("  - Not enough tagged matching entries yet\n");
+    }
+    let mut recall_tags = detect_tags(query);
+    for tag in tags_from_summary(&summary, 2) {
+        push_tag(&mut recall_tags, tag);
+    }
+    let question = recall_question(query, &filter, &recall_tags);
+    out.push_str(&format!(
+        "\nNext recall question\n  {question}\n\nBoundary\n  `mp find` searches your local journal only. It is recall support for market literacy, not live research or trading advice."
+    ));
+    out
+}
+
+fn event_recall_snippet(line: &str, query: &str) -> String {
+    let timestamp = json_field(line, "timestamp").unwrap_or_else(|| "unknown-time".into());
+    let event_type = json_field(line, "type").unwrap_or_else(|| "entry".into());
+    let body = json_field(line, "text")
+        .or_else(|| json_field(line, "question"))
+        .or_else(|| json_field(line, "mood"))
+        .or_else(|| json_field(line, "concept"))
+        .or_else(|| json_field(line, "source_titles"))
+        .unwrap_or_else(|| compact_raw_event(line));
+    format!(
+        "{timestamp} · {event_type} · {}",
+        compact_snippet(&body, query)
+    )
+}
+
+fn compact_raw_event(line: &str) -> String {
+    compact_snippet(line, "")
+}
+
+fn compact_snippet(text: &str, _query: &str) -> String {
+    let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let max_chars = 140usize;
+    if cleaned.chars().count() <= max_chars {
+        return cleaned;
+    }
+    let snippet = cleaned.chars().take(max_chars).collect::<String>();
+    format!("{snippet}...")
+}
+
+#[derive(Clone, Debug)]
+struct JournalSummary {
+    pulses: usize,
+    weeks: usize,
+    regimes: usize,
+    inquiries: usize,
+    research_inquiries: usize,
+    thoughts: usize,
+    feedback: usize,
+    tag_counts: Vec<(&'static str, usize)>,
+    thesis_types: Vec<String>,
+    korean_entries: usize,
+}
+
+fn summarize_events(events: &[String]) -> JournalSummary {
+    let pulses = count_events(events, "pulse");
+    let weeks = count_events(events, "week");
+    let regimes = count_events(events, "regime");
+    let inquiries = count_events(events, "inquiry");
+    let research_inquiries = count_events(events, "research_inquiry");
+    let thoughts = count_events(events, "thought");
+    let feedback = count_events(events, "feedback");
+    let mut tag_counts: Vec<(&str, usize)> = vec![
         ("rates", 0),
         ("semis", 0),
         ("fx", 0),
@@ -1424,6 +2805,7 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
         ("positioning", 0),
     ];
     let mut thesis_types = Vec::new();
+    let mut korean_entries = 0usize;
     for line in events.iter().filter(|l| {
         l.contains("\"type\":\"thought\"")
             || l.contains("\"type\":\"inquiry\"")
@@ -1432,22 +2814,49 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
         let text = json_field(line, "text")
             .or_else(|| json_field(line, "question"))
             .unwrap_or_default();
+        if contains_hangul(&text) {
+            korean_entries += 1;
+        }
         let tags = detect_tags(&text);
         if !tags.is_empty() {
             thesis_types.push(detect_thesis_type(&tags));
         }
         for tag in tags {
-            if let Some((_, count)) = counts.iter_mut().find(|(name, _)| *name == tag) {
+            if let Some((_, count)) = tag_counts.iter_mut().find(|(name, _)| *name == tag) {
                 *count += 1;
             }
         }
     }
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    tag_counts.sort_by(|a, b| b.1.cmp(&a.1));
     thesis_types.sort();
     thesis_types.dedup();
-    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), pulses, inquiries, research_inquiries, thoughts, feedback);
+    JournalSummary {
+        pulses,
+        weeks,
+        regimes,
+        inquiries,
+        research_inquiries,
+        thoughts,
+        feedback,
+        tag_counts,
+        thesis_types,
+        korean_entries,
+    }
+}
+
+fn count_events(events: &[String], event_type: &str) -> usize {
+    let needle = format!("\"type\":\"{event_type}\"");
+    events.iter().filter(|l| l.contains(&needle)).count()
+}
+
+fn render_review_from_events(events: &[String], journal: &str) -> String {
+    if events.is_empty() {
+        return "No market-pulse journal entries yet. Start with `mp \"your market question\"`, then `mp think \"...\"`.".into();
+    }
+    let summary = summarize_events(events);
+    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), summary.pulses, summary.weeks, summary.regimes, summary.inquiries, summary.research_inquiries, summary.thoughts, summary.feedback);
     let mut wrote = false;
-    for (tag, count) in counts.into_iter().filter(|(_, c)| *c > 0).take(6) {
+    for (tag, count) in summary.tag_counts.iter().filter(|(_, c)| *c > 0).take(6) {
         wrote = true;
         out.push_str(&format!("  - {tag}: {count}\n"));
     }
@@ -1455,19 +2864,48 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
         out.push_str("  - Not enough tagged thoughts yet\n");
     }
     out.push_str("\nQuestion / thesis habits\n");
-    if thesis_types.is_empty() {
+    if summary.thesis_types.is_empty() {
         out.push_str("  - Not enough inquiry/thesis history yet; ask one rough question with `mp \"...\"`.\n");
     } else {
-        for t in thesis_types.iter().take(5) {
+        for t in summary.thesis_types.iter().take(5) {
             out.push_str(&format!("  - You have been using a {t} lens.\n"));
         }
     }
-    out.push_str("\nSuggested drill\n  For the next 3 notes, explicitly separate:\n  1. market-wide signal\n  2. sector-specific signal\n  3. event/positioning alternative\n  4. what would falsify the view");
+    out.push_str(&review_drill(&summary));
     out
 }
 
 fn pulse_json(p: &Pulse) -> String {
-    format!("{{\"type\":\"pulse\",\"timestamp\":\"{}\",\"session\":\"{}\",\"mood\":\"{}\",\"question\":\"{}\",\"concept\":\"{}\"}}", esc(&p.timestamp), esc(&p.session), esc(&p.mood), esc(&p.question), esc(&p.concept))
+    format!(
+        "{{\"type\":\"pulse\",\"timestamp\":\"{}\",\"session\":\"{}\",\"basis\":\"{}\",\"mood\":\"{}\",\"question\":\"{}\",\"concept\":\"{}\"}}",
+        esc(&p.timestamp),
+        esc(&p.session),
+        esc(&p.basis.join(" | ")),
+        esc(&p.mood),
+        esc(&p.question),
+        esc(&p.concept)
+    )
+}
+
+fn regime_json(r: &Regime) -> String {
+    format!(
+        "{{\"type\":\"regime\",\"timestamp\":\"{}\",\"basis\":\"{}\",\"label\":\"{}\",\"question\":\"{}\"}}",
+        esc(&r.timestamp),
+        esc(&r.basis.join(" | ")),
+        esc(&r.label),
+        esc(&r.question)
+    )
+}
+
+fn week_json(w: &Weekly, journal_entries: usize) -> String {
+    format!(
+        "{{\"type\":\"week\",\"timestamp\":\"{}\",\"basis\":\"{}\",\"label\":\"{}\",\"journal_entries\":{},\"question\":\"{}\"}}",
+        esc(&w.timestamp),
+        esc(&w.basis.join(" | ")),
+        esc(&w.label),
+        journal_entries,
+        esc(w.questions.first().map(String::as_str).unwrap_or(""))
+    )
 }
 
 fn thought_json(text: &str, linked: Option<&str>) -> String {
@@ -1586,6 +3024,50 @@ mod tests {
         );
         assert!(parse_command(&["ask".into()]).is_err());
         assert!(parse_command(&["--bad".into()]).is_err());
+    }
+
+    #[test]
+    fn routes_regime_to_regime_command() {
+        assert_eq!(
+            parse_command(&["regime".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Regime
+        );
+    }
+
+    #[test]
+    fn routes_week_to_week_command() {
+        assert_eq!(
+            parse_command(&["week".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Week
+        );
+        assert_eq!(
+            parse_command(&["weekly".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Week
+        );
+    }
+
+    #[test]
+    fn routes_calendar_to_calendar_command() {
+        assert_eq!(
+            parse_command(&["calendar".into()]).unwrap(),
+            CommandKind::Calendar
+        );
+        assert_eq!(
+            parse_command(&["cal".into()]).unwrap(),
+            CommandKind::Calendar
+        );
+    }
+
+    #[test]
+    fn routes_find_to_find_command() {
+        assert_eq!(
+            parse_command(&["find".into(), "금리".into()]).unwrap(),
+            CommandKind::Find
+        );
+        assert_eq!(
+            parse_command(&["search".into(), "달러".into()]).unwrap(),
+            CommandKind::Find
+        );
     }
 
     #[test]
@@ -1835,6 +3317,8 @@ mod tests {
         assert!(f.thesis_type.contains("rates/growth"));
         assert!(f.counter.iter().any(|x| x.contains("Semis strength")));
         assert!(f.check.iter().any(|x| x.to_lowercase().contains("yields")));
+        assert!(f.next.iter().any(|x| x.contains("증거")));
+        assert!(f.next.iter().any(|x| x.contains("틀리게")));
     }
 
     #[test]
@@ -1860,6 +3344,243 @@ mod tests {
         assert!(out.contains("Question / thesis habits"));
         assert!(out.contains("event"));
         assert!(out.contains("rates"));
+        assert!(out.contains("검증 루프"));
+        assert!(out.contains("대안"));
+        assert!(out.contains("반증"));
+    }
+
+    #[test]
+    fn review_date_filter_keeps_only_matching_timestamp_date() {
+        let events = vec![
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-20T09:00:00+0900\",\"question\":\"달러가 코스피에 부담?\",\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T10:00:00+0900\",\"text\":\"금리가 내려가는데 성장주가 버틴다\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"research_inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"대형 IPO가 시장에 영향?\",\"provider\":\"noop\",\"source_count\":0,\"thesis_type\":\"event-driven / supply-calendar thesis\",\"concepts\":\"event-driven supply/attention\"}".into(),
+        ];
+        let filtered = filter_events_by_date(events, "2026-04-21", 80);
+        assert_eq!(filtered.len(), 2);
+        let out = render_review_for_date_from_events(&filtered, "/tmp/journal.jsonl", "2026-04-21");
+        assert!(out.contains("Review date filter: 2026-04-21"));
+        assert!(out.contains("Entries scanned: 2"));
+        assert!(out.contains("rates"));
+        assert!(out.contains("event"));
+        assert!(!out.contains("dollar-liquidity"));
+    }
+
+    #[test]
+    fn review_date_filter_applies_limit_after_date_match() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T09:00:00+0900\",\"text\":\"금리\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T10:00:00+0900\",\"text\":\"달러\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"text\":\"유가\",\"linked_pulse_timestamp\":null}".into(),
+        ];
+        let filtered = filter_events_by_date(events, "2026-04-21", 2);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered[0].contains("10:00:00"));
+        assert!(filtered[1].contains("11:00:00"));
+    }
+
+    #[test]
+    fn review_date_filter_has_empty_date_message() {
+        let out = render_review_for_date_from_events(&[], "/tmp/journal.jsonl", "2026-04-19");
+        assert!(out.contains("No market-pulse journal entries found for 2026-04-19"));
+        assert!(out.contains("mp review --limit N"));
+    }
+
+    #[test]
+    fn week_date_filter_keeps_last_matching_dates() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-19T09:00:00+0900\",\"text\":\"유가\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"금리\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"week\",\"timestamp\":\"2026-04-20T11:00:00+0900\",\"label\":\"mixed\"}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"text\":\"달러\",\"linked_pulse_timestamp\":null}".into(),
+        ];
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let filtered = filter_events_by_dates(events, &dates, 10);
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered[0].contains("10:00:00"));
+        assert!(filtered[1].contains("\"type\":\"week\""));
+        assert!(filtered[2].contains("11:00:00"));
+    }
+
+    #[test]
+    fn review_period_filter_renders_label_and_matching_dates() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-19T09:00:00+0900\",\"text\":\"유가\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"금리\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"달러와 코스피?\",\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
+        ];
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let filtered = filter_events_by_dates(events, &dates, 10);
+        let out = render_review_for_dates_from_events(
+            &filtered,
+            "/tmp/journal.jsonl",
+            "this-week 2026-04-20..2026-04-21",
+        );
+        assert!(out.contains("Review period filter: this-week 2026-04-20..2026-04-21"));
+        assert!(out.contains("Entries scanned: 2"));
+        assert!(out.contains("rates"));
+        assert!(out.contains("fx"));
+        assert!(!out.contains("oil"));
+    }
+
+    #[test]
+    fn review_rejects_multiple_period_selectors() {
+        assert!(review(&["review".into(), "--today".into(), "--this-week".into()]).is_err());
+        assert!(review(&[
+            "review".into(),
+            "--date".into(),
+            "2026-04-21".into(),
+            "--last-week".into(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn calendar_renders_review_shortcuts_and_boundary() {
+        let out = render_calendar();
+        assert!(out.contains("Market Pulse Calendar"));
+        assert!(out.contains("today:"));
+        assert!(out.contains("this-week:"));
+        assert!(out.contains("last-week:"));
+        assert!(out.contains("mp review --this-week"));
+        assert!(out.contains("not fuzzy full-text search"));
+        assert!(out.contains("not exchange-holiday calendars"));
+    }
+
+    #[test]
+    fn find_args_collect_query_and_period_selector() {
+        let args = vec![
+            "find".into(),
+            "금리".into(),
+            "성장주".into(),
+            "--this-week".into(),
+            "--limit".into(),
+            "3".into(),
+        ];
+        let parsed = parse_find_args(&args).unwrap();
+        assert_eq!(parsed.query, "금리 성장주");
+        assert_eq!(parsed.limit, 3);
+        match parsed.filter.unwrap() {
+            ReviewFilter::Dates { label, dates } => {
+                assert!(label.starts_with("this-week"));
+                assert!(!dates.is_empty());
+            }
+            ReviewFilter::Date(_) => panic!("expected period filter"),
+        }
+    }
+
+    #[test]
+    fn find_rejects_empty_query_and_multiple_selectors() {
+        assert!(parse_find_args(&["find".into(), "--this-week".into()]).is_err());
+        assert!(parse_find_args(&[
+            "find".into(),
+            "달러".into(),
+            "--today".into(),
+            "--last-week".into(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn find_events_filters_by_query_after_date_window() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-19T09:00:00+0900\",\"text\":\"지난주 유가와 달러\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"이번주 금리와 성장주\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"달러가 코스피에 부담?\",\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
+        ];
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let filtered = filter_events_by_dates(events, &dates, 10);
+        let found = filtered
+            .into_iter()
+            .filter(|line| line.to_lowercase().contains("달러"))
+            .collect::<Vec<_>>();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("코스피"));
+    }
+
+    #[test]
+    fn find_renders_recall_card_and_boundary() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"이번주 금리와 성장주 긴장\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"금리 하락이 성장주에 좋은 신호임?\",\"thesis_type\":\"rates / policy-expectation thesis\",\"concepts\":\"rates policy\"}".into(),
+        ];
+        let out = render_find_from_events(
+            &events,
+            "/tmp/journal.jsonl",
+            "금리",
+            "this-week 2026-04-20..2026-04-21".into(),
+        );
+        assert!(out.contains("Market Pulse Find"));
+        assert!(out.contains("Query: \"금리\""));
+        assert!(out.contains("Entries matched: 2"));
+        assert!(out.contains("Next recall question"));
+        assert!(out.contains("this-week 2026-04-20..2026-04-21"));
+        assert!(out.contains("금리·달러"));
+        assert!(out.contains("local journal only"));
+        assert!(out.contains("not live research or trading advice"));
+    }
+
+    #[test]
+    fn find_empty_result_points_to_calendar() {
+        let out = render_find_from_events(
+            &[],
+            "/tmp/journal.jsonl",
+            "반도체",
+            "last-week 2026-04-13..2026-04-19".into(),
+        );
+        assert!(out.contains("No market-pulse journal entries matched"));
+        assert!(out.contains("mp calendar"));
+    }
+
+    #[test]
+    fn week_basis_names_current_calendar_window() {
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let basis = week_basis(&dates);
+        assert!(basis[0].contains("current-week window 2026-04-20..2026-04-21"));
+        assert!(basis[1].contains("range=1mo interval=1d"));
+        assert!(basis[1].contains("latest daily close"));
+        assert!(basis[1].contains("regularMarketPrice is fallback only"));
+        assert!(basis[2].contains("current local calendar week"));
+    }
+
+    #[test]
+    fn first_close_for_dates_uses_matching_timestamp_date() {
+        let body =
+            "{\"timestamp\":[1776643200,1776729600],\"indicators\":{\"quote\":[{\"close\":[100.0,110.0]}]}}";
+        assert_eq!(
+            first_close_for_dates(body, &["2026-04-21".into()]).unwrap(),
+            110.0
+        );
+    }
+
+    #[test]
+    fn review_date_validation_rejects_non_iso_date() {
+        assert!(validate_review_date("2026-04-21").is_ok());
+        assert!(validate_review_date("20260421").is_err());
+        assert!(validate_review_date("2026-99-99").is_err());
+        assert!(validate_review_date("yesterday").is_err());
+        assert!(review(&["review".into(), "--date".into(), "bad".into()]).is_err());
+    }
+
+    #[test]
+    fn review_days_ago_validation_accepts_small_whole_numbers() {
+        assert_eq!(parse_review_days_ago("0").unwrap(), 0);
+        assert_eq!(parse_review_days_ago("5").unwrap(), 5);
+        assert!(parse_review_days_ago("-1").is_err());
+        assert!(parse_review_days_ago("1.5").is_err());
+        assert!(parse_review_days_ago("4000").is_err());
+    }
+
+    #[test]
+    fn review_rejects_multiple_date_selectors() {
+        assert!(review(&[
+            "review".into(),
+            "--date".into(),
+            "2026-04-21".into(),
+            "--days".into(),
+            "1".into(),
+        ])
+        .is_err());
     }
 
     #[test]
@@ -1893,7 +3614,156 @@ mod tests {
         assert!(p.tensions.iter().any(|t| t.contains("rates")));
         assert!(!p.question.is_empty());
         assert!(!question_seeds_for(&p).is_empty());
-        assert!(render_pulse(&p, false).contains("Market puzzle / question seeds"));
+        let rendered = render_pulse(&p, false);
+        assert!(rendered.contains("Market puzzle / question seeds"));
+        assert!(rendered.contains("Basis"));
+        assert!(rendered.contains("close-to-close pulse"));
+        assert!(rendered.contains("not high/low gap, exact 24h, or weekly return"));
+    }
+
+    #[test]
+    fn now_change_prefers_daily_close_series_over_market_quote() {
+        let body = r#"{"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110,121]}]}}"#;
+
+        let (value, previous) = value_and_previous_for_window(
+            body,
+            &close_values(body),
+            &WindowChange::PriorDailyClose,
+        );
+
+        assert_eq!(value, Some(121.0));
+        assert_eq!(previous, Some(110.0));
+    }
+
+    #[test]
+    fn week_change_prefers_daily_close_series_over_market_quote() {
+        let body = r#"{"timestamp":[1776643200,1776729600,1776816000],"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110,121]}]}}"#;
+
+        let (value, previous) = value_and_previous_for_window(
+            body,
+            &close_values(body),
+            &WindowChange::FirstMatchingDate(vec!["2026-04-21".into()]),
+        );
+
+        assert_eq!(value, Some(121.0));
+        assert_eq!(previous, Some(110.0));
+    }
+
+    #[test]
+    fn week_change_without_matching_date_falls_back_to_latest_close() {
+        let body = r#"{"timestamp":[1776643200,1776729600],"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110]}]}}"#;
+
+        let (value, previous) = value_and_previous_for_window(
+            body,
+            &close_values(body),
+            &WindowChange::FirstMatchingDate(vec!["2026-04-24".into()]),
+        );
+
+        assert_eq!(value, Some(110.0));
+        assert_eq!(previous, Some(110.0));
+    }
+
+    #[test]
+    fn regime_change_prefers_weekly_close_series_over_market_quote() {
+        let body = r#"{"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110,121]}]}}"#;
+
+        let (value, previous) =
+            value_and_previous_for_window(body, &close_values(body), &WindowChange::FirstClose);
+
+        assert_eq!(value, Some(121.0));
+        assert_eq!(previous, Some(100.0));
+    }
+
+    #[test]
+    fn regime_renders_timeframe_basis_and_boundaries() {
+        let regime = compose_test_regime(vec![
+            Asset {
+                symbol: "^IXIC",
+                label: "Nasdaq",
+                unit: "",
+                value: Some(100.0),
+                change: Some(8.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^GSPC",
+                label: "S&P 500",
+                unit: "",
+                value: Some(100.0),
+                change: Some(4.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^TNX",
+                label: "US 10Y",
+                unit: "%",
+                value: Some(4.8),
+                change: Some(4.0),
+                note: None,
+            },
+            Asset {
+                symbol: "DX-Y.NYB",
+                label: "DXY",
+                unit: "",
+                value: Some(105.0),
+                change: Some(1.2),
+                note: None,
+            },
+        ]);
+        assert!(regime.label.contains("resilience") || regime.label.contains("risk-on"));
+        let rendered = render_regime(&regime);
+        assert!(rendered.contains("Market Regime"));
+        assert!(rendered.contains("1-3 month regime read"));
+        assert!(rendered.contains("latest Yahoo weekly close value"));
+        assert!(rendered.contains("regularMarketPrice is fallback only"));
+        assert!(rendered.contains("Next better regime question"));
+        assert!(rendered.contains("not investment advice"));
+    }
+
+    #[test]
+    fn week_renders_hybrid_market_and_learning_card() {
+        let week = compose_test_week(vec![
+            Asset {
+                symbol: "^IXIC",
+                label: "Nasdaq",
+                unit: "",
+                value: Some(100.0),
+                change: Some(2.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^GSPC",
+                label: "S&P 500",
+                unit: "",
+                value: Some(100.0),
+                change: Some(1.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^TNX",
+                label: "US 10Y",
+                unit: "%",
+                value: Some(4.8),
+                change: Some(1.8),
+                note: None,
+            },
+        ]);
+        let events = vec![
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T09:00:00+0900\",\"question\":\"금리와 반도체가 같이 움직이나?\",\"thesis_type\":\"rates/growth tension thesis\",\"concepts\":\"rates vs growth\"}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-21T10:00:00+0900\",\"text\":\"달러가 강한데 코스피가 버틴다\",\"linked_pulse_timestamp\":null}".into(),
+        ];
+        let rendered = render_week(&week, &events);
+        assert!(rendered.contains("Weekly Market Pulse"));
+        assert!(rendered.contains("1W Asset Map"));
+        assert!(rendered.contains("latest daily close"));
+        assert!(rendered.contains("regularMarketPrice is fallback only"));
+        assert!(rendered.contains("This week's learning loop"));
+        assert!(rendered.contains("Recurring journal themes"));
+        assert!(rendered.contains("Next week check questions"));
+        assert!(rendered.contains("evidence"));
+        assert!(rendered.contains("rename this week"));
+        assert!(rendered.contains("rates"));
+        assert!(rendered.contains("not investment advice"));
     }
 
     fn compose_test_pulse(assets: Vec<Asset>) -> Pulse {
@@ -1909,9 +3779,60 @@ mod tests {
         Pulse {
             timestamp: timestamp(),
             session: session(),
+            basis: PULSE_QUOTE_BASIS.iter().map(|s| (*s).to_string()).collect(),
             question: infer_question(&tensions, &mood),
             concept: infer_concept(&tensions, &drivers),
             mood,
+            assets,
+            drivers,
+            tensions,
+            notes: vec![],
+        }
+    }
+
+    fn compose_test_regime(assets: Vec<Asset>) -> Regime {
+        let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+        let label = infer_regime_label(
+            avg_equity,
+            change_for(&assets, "DX-Y.NYB"),
+            change_for(&assets, "^TNX"),
+            change_for(&assets, "CL=F"),
+            change_for(&assets, "BTC-USD"),
+        );
+        let drivers = infer_regime_drivers(&assets);
+        let tensions = infer_regime_tensions(&assets, &label);
+        Regime {
+            timestamp: timestamp(),
+            basis: REGIME_QUOTE_BASIS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            question: infer_regime_question(&label, &tensions),
+            checks: infer_regime_checks(&assets, &label),
+            label,
+            assets,
+            drivers,
+            tensions,
+            notes: vec![],
+        }
+    }
+
+    fn compose_test_week(assets: Vec<Asset>) -> Weekly {
+        let avg_equity = avg_change(&assets, &["^GSPC", "^IXIC", "^KS11"]).unwrap_or(0.0);
+        let label = infer_week_label(
+            avg_equity,
+            change_for(&assets, "DX-Y.NYB"),
+            change_for(&assets, "^TNX"),
+            change_for(&assets, "CL=F"),
+            change_for(&assets, "BTC-USD"),
+        );
+        let drivers = infer_week_drivers(&assets);
+        let tensions = infer_week_tensions(&assets, &label);
+        Weekly {
+            timestamp: timestamp(),
+            basis: week_basis(&["2026-04-20".into(), "2026-04-21".into()]),
+            questions: infer_week_questions(&assets, &label, &tensions),
+            label,
             assets,
             drivers,
             tensions,

@@ -1,6 +1,6 @@
 ---
 name: mp
-description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색, 리서치 스캐폴드, 시장 카드, 사용자 해석 피드백, 리뷰를 제공합니다. /mp 질문, /mp ask 질문, /mp research 질문, /mp now, /mp think, /mp review 또는 오늘 시황/시장 펄스/시장 생각 피드백 요청에 사용합니다.
+description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색, 리서치 스캐폴드, 시장 카드, 주간 학습 카드, 날짜 창 확인, 로컬 저널 recall 검색, 사용자 해석 피드백, 리뷰를 제공합니다. /mp 질문, /mp ask 질문, /mp research 질문, /mp now, /mp week, /mp calendar, /mp regime, /mp think, /mp review, /mp find 또는 오늘 시황/시장 펄스/시장 생각 피드백 요청에 사용합니다.
 ---
 
 # market-pulse Claude Command
@@ -14,8 +14,15 @@ description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색
 /mp ask 대형 IPO 때문에 성장주가 강한 걸까?
 /mp research 금리 하락이 성장주에 좋은 신호임?
 /mp now
+/mp week
+/mp calendar
+/mp regime
 /mp think 금리가 부담인데도 반도체가 버티는 것 같다
 /mp review
+/mp review --date 2026-04-21
+/mp review --days 1
+/mp review --this-week
+/mp find 금리 --this-week
 ```
 
 인자가 없으면 `/mp now`로 처리합니다.
@@ -24,11 +31,18 @@ description: market-pulse CLI를 실행해 터미널 기반 시장 질문 탐색
 
 1. 사용자의 인자를 파악합니다.
    - 없음 또는 `now`: `mp now` 실행
+   - `week`: `mp week` 실행
+   - `calendar` 또는 `cal`: `mp calendar` 실행
+   - `regime`: `mp regime` 실행
    - `ask <question>`: `mp ask "<question>"` 실행
    - `research <question>`: `mp research "<question>"` 실행
    - 알려진 명령어가 아닌 일반 텍스트: `mp "<question>"` 실행
    - `think <text>`: `mp think "<text>"` 실행
    - `review`: `mp review` 실행
+   - `review --date YYYY-MM-DD`: `mp review --date YYYY-MM-DD` 실행
+   - `review --days N`: `mp review --days N` 실행
+   - `review --today|--yesterday|--this-week|--last-week`: 같은 selector로 `mp review` 실행
+   - `find <query>` 또는 `search <query>`: `mp find "<query>"` 실행, selector가 있으면 보존
 2. 가능한 한 로컬 CLI를 직접 실행합니다.
 3. CLI 출력은 핵심만 정리하되, 중요한 피드백 구조는 유지합니다.
 4. `MARKET_PULSE_SEARCH_CMD`가 설정되어 있으면 `mp`가 제한형 JSONL source bridge로 사용하게 두고, slash command 프롬프트에서 검색을 재구현하지 않습니다.
@@ -74,6 +88,24 @@ mp research "금리 하락이 성장주에 좋은 신호임?"
 mp now
 ```
 
+### `/mp week`
+
+```bash
+mp week
+```
+
+### `/mp calendar`
+
+```bash
+mp calendar
+```
+
+### `/mp regime`
+
+```bash
+mp regime
+```
+
 ### `/mp think ...`
 
 ```bash
@@ -84,4 +116,13 @@ mp think "금리가 부담인데도 반도체가 버티는 것 같다"
 
 ```bash
 mp review
+mp review --date 2026-04-21
+mp review --days 1
+mp review --this-week
+```
+
+### `/mp find ...query...`
+
+```bash
+mp find "금리" --this-week
 ```

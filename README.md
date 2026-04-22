@@ -10,8 +10,15 @@ mp research "금리 하락이 성장주에 좋은 신호임?"
 mp "대형 IPO 때문에 성장주가 강한 걸까?" --research
 mp ask "대형 IPO 때문에 성장주가 강한 걸까?"
 mp now
+mp week
+mp calendar
+mp regime
 mp think "금리가 부담인데도 반도체가 버티는 걸 보면 성장 기대가 아직 남아있는 것 같다"
 mp review
+mp review --date 2026-04-21
+mp review --days 1
+mp review --this-week
+mp find "금리" --this-week
 ```
 
 ## North star
@@ -131,6 +138,55 @@ Prints a compact market pulse card:
 
 Live quotes are fetched through the Yahoo Finance chart endpoint by shelling out to `curl`. If a quote fails, the card still renders so the learning loop is not blocked.
 
+`mp now` is a close-to-close pulse, not a high/low gap, exact 24-hour, local calendar-day, or weekly return screen. The timestamp and session label use the local machine clock, while each percentage move is calculated from Yahoo `range=5d&interval=1d` daily closes: latest daily close value versus prior daily close. `regularMarketPrice` is fallback only when the close series is unavailable. Because US indices, Korea, FX, futures, and crypto use different clocks, treat the card as a cross-asset directional snapshot and use `$mp-research` when the exact exchange calendar matters.
+
+### `mp regime`
+
+Prints a broader 1-3 month market regime card:
+
+- regime label / mood
+- explicit 1-3 month basis
+- cross-asset map
+- regime drivers
+- regime tensions
+- checks for the next session/week
+- next better regime question
+
+`mp regime` is intentionally separate from `mp now`: `now` is a close-to-close pulse, while `regime` is the larger backdrop traders compare against short-term moves. Regime market change uses Yahoo `range=3mo&interval=1wk` weekly closes: latest weekly close value versus the first available weekly close, with `regularMarketPrice` as fallback only. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD`, the easier `mp review --days N`, and calendar aliases like `mp review --this-week`; broader search-style review remains a later phase.
+
+### `mp week`
+
+Prints a hybrid weekly market-and-learning card:
+
+- current-week market story
+- explicit market and journal basis
+- 1W cross-asset map
+- weekly market themes and tensions
+- this week's saved pulse/regime/inquiry/thought counts
+- recurring journal themes and thesis habits
+- next-week check questions
+
+`mp week` fills the gap between `mp now` and `mp regime`: it is not a separate daily command and not a 1-3 month regime read. The default window is current-date based: the journal review uses the current local calendar week, while the market change uses Yahoo `range=1mo&interval=1d` to find the first close matching the current local week before comparing it with the latest daily close value. `regularMarketPrice` is fallback only. If an asset has not traded during the current local week yet, the weekly card falls back to the latest available close instead of pretending a week-to-date move exists.
+
+### `mp calendar`
+
+Prints the local-date windows market-pulse uses for review shortcuts:
+
+- today
+- yesterday
+- this-week
+- last-week
+- matching `mp review` shortcut commands
+- explicit boundary that these are local-date helpers, not exchange-holiday calendars or trading signals
+
+Use it when you forget which date window a shortcut means:
+
+```bash
+mp calendar
+mp review --this-week
+mp review --last-week
+```
+
 ### `mp think "..."`
 
 Records your market interpretation and returns structured feedback:
@@ -143,9 +199,82 @@ Records your market interpretation and returns structured feedback:
 - next observation question
 - related concepts
 
+### `mp find "query"`
+
+Searches your local market-pulse journal and renders a recall card, not just raw grep output:
+
+- explicit query and date/window basis
+- matching entries with timestamp/type snippets
+- matched event counts
+- recurring themes in matches
+- next recall question
+- local-journal-only boundary
+
+Examples:
+
+```bash
+mp find "금리"
+mp find "달러" --this-week
+mp find "유가" --last-week
+mp find "반도체" --days 3 --limit 5
+```
+
+`mp search` is accepted as a thin alias for `mp find`. The first pass is intentionally explicit: it does not parse arbitrary natural-language dates, does not use exchange calendars, does not call live web providers, and does not add semantic/vector search.
+
 ### `mp review`
 
-Reviews recent pulses, inquiries, thoughts, and feedback to surface recurring themes, question habits, and reasoning drills.
+Reviews recent pulses, regimes, inquiries, thoughts, and feedback to surface recurring themes, question habits, and reasoning drills.
+
+Use `--date YYYY-MM-DD` to review only entries recorded on a specific timestamp date, `--days N` for the common “N days back” flow, or small readable aliases for common calendar windows:
+
+```bash
+mp review --date 2026-04-21
+mp review --days 1
+mp review --today
+mp review --yesterday
+mp review --this-week
+mp review --last-week
+```
+
+`--limit N` can be combined with one date/window selector; the limit is applied after matching, keeping the most recent matching entries. `--ago N` and `--days-ago N` remain accepted as compatibility aliases, but `--days N` is the preferred relative-day spelling. Use `mp calendar` when you want to inspect what `today`, `yesterday`, `this-week`, and `last-week` mean on the current local machine clock. The date filter is explicit by design. Broader natural-language lookup such as arbitrary `어제` / `지난주` phrasing remains a later search/review phase.
+
+
+## OMX/Codex aliases
+
+When the Codex/OMX skill adapter is installed, you can use readable `$mp-*`
+aliases inside Codex/OMX sessions without changing the standalone shell CLI:
+
+```text
+$mp-now
+$mp-week
+$mp-calendar
+$mp-regime
+$mp-ask "대형 IPO 때문에 성장주가 강한 걸까?"
+$mp-research "금리 하락이 성장주에 좋은 신호임?"
+$mp-think "금리가 부담인데도 반도체가 버티는 것 같다"
+$mp-review
+$mp-review --date 2026-04-21
+$mp-review --days 1
+$mp-review --this-week
+$mp-find "금리" --this-week
+```
+
+These aliases are thin wrappers around the same local `mp` binary:
+
+- `$mp-now` -> `mp now`
+- `$mp-week` -> `mp week`
+- `$mp-calendar` -> `mp calendar`
+- `$mp-regime` -> `mp regime`
+- `$mp-ask` -> `mp ask`
+- `$mp-research` -> `mp research`
+- `$mp-think` -> `mp think`
+- `$mp-review` -> `mp review`, `mp review --date YYYY-MM-DD`, `mp review --days N`, or a small period alias such as `mp review --this-week`
+- `$mp-find` -> `mp find`, optionally with the same small date/window selectors
+
+The canonical `$mp ...` skill remains available for flexible calls. The aliases
+are explicit only: they do not auto-capture arbitrary market/economy sentences,
+and live/source-backed lookup still requires `$mp-research` or an existing
+`mp ... --research` flow.
 
 ## Storage
 
@@ -193,6 +322,7 @@ make smoke
 The repo includes thin adapters that call the same standalone `mp` binary:
 
 - Codex skill: `adapters/codex-skill/SKILL.md`
+- Codex readable alias skills: `adapters/codex-skill/aliases/`
 - Claude Code slash command: `adapters/claude-command/mp/COMMAND.md`
 
 ## Design
