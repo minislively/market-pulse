@@ -152,7 +152,7 @@ Prints a broader 1-3 month market regime card:
 - checks for the next session/week
 - next better regime question
 
-`mp regime` is intentionally separate from `mp now`: `now` is a close-to-close pulse, while `regime` is the larger backdrop traders compare against short-term moves. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD`, the easier `mp review --days N`, and calendar aliases like `mp review --this-week`; broader search-style review remains a later phase.
+`mp regime` is intentionally separate from `mp now`: `now` is a close-to-close pulse, while `regime` is the larger backdrop traders compare against short-term moves. Regime market change uses Yahoo `range=3mo&interval=1wk` weekly closes: latest weekly close value versus the first available weekly close, with `regularMarketPrice` as fallback only. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD`, the easier `mp review --days N`, and calendar aliases like `mp review --this-week`; broader search-style review remains a later phase.
 
 ### `mp week`
 
@@ -166,7 +166,7 @@ Prints a hybrid weekly market-and-learning card:
 - recurring journal themes and thesis habits
 - next-week check questions
 
-`mp week` fills the gap between `mp now` and `mp regime`: it is not a separate daily command and not a 1-3 month regime read. The default window is current-date based: the journal review uses the current local calendar week, while the market change uses Yahoo `range=1mo&interval=1d` to find the first close matching the current local week before comparing it with the latest `regularMarketPrice`. If an asset has not traded during the current local week yet, the weekly card falls back to the latest available close instead of pretending a week-to-date move exists.
+`mp week` fills the gap between `mp now` and `mp regime`: it is not a separate daily command and not a 1-3 month regime read. The default window is current-date based: the journal review uses the current local calendar week, while the market change uses Yahoo `range=1mo&interval=1d` to find the first close matching the current local week before comparing it with the latest daily close value. `regularMarketPrice` is fallback only. If an asset has not traded during the current local week yet, the weekly card falls back to the latest available close instead of pretending a week-to-date move exists.
 
 ### `mp calendar`
 

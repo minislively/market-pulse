@@ -202,7 +202,7 @@ const PULSE_QUOTE_BASIS: &[&str] = &[
 
 const REGIME_QUOTE_BASIS: &[&str] = &[
     "time: local machine timestamp; regime is broader than today's pulse",
-    "change: latest Yahoo regularMarketPrice vs first available close in the chart window",
+    "change: latest Yahoo weekly close value vs first available weekly close; regularMarketPrice is fallback only",
     "window: Yahoo chart range=3mo interval=1wk; this is a 1-3 month regime read, not a trading signal",
 ];
 
@@ -762,7 +762,7 @@ fn week_basis(dates: &[String]) -> Vec<String> {
     let window = week_window_label(dates);
     vec![
         format!("time: local machine timestamp; current-week window {window}; weekly is a learning loop, not a trading signal"),
-        "market window: Yahoo chart range=1mo interval=1d; change is latest regularMarketPrice vs first close matching the current local week, falling back to the latest available close if the asset has not traded this week".into(),
+        "market window: Yahoo chart range=1mo interval=1d; change is latest daily close vs first close matching the current local week; regularMarketPrice is fallback only, and assets without a current-week close fall back to the latest available close".into(),
         format!("journal window: current local calendar week {window}, filtered before the weekly card is saved"),
     ]
 }
@@ -1069,17 +1069,18 @@ fn value_and_previous_for_window(
     };
 
     let value = match change_from {
-        WindowChange::PriorDailyClose => latest_close().or_else(market_price),
-        _ => market_price().or_else(latest_close),
+        WindowChange::PriorDailyClose
+        | WindowChange::FirstClose
+        | WindowChange::FirstMatchingDate(_) => latest_close().or_else(market_price),
     };
     let previous = match change_from {
         WindowChange::PriorDailyClose => {
             prior_close().or_else(|| number_after(body, "\"chartPreviousClose\":"))
         }
         WindowChange::FirstClose => closes.first().copied(),
-        WindowChange::FirstMatchingDate(dates) => first_close_for_dates(body, dates)
-            .or_else(|| number_after(body, "\"chartPreviousClose\":"))
-            .or_else(|| closes.last().copied()),
+        WindowChange::FirstMatchingDate(dates) => {
+            first_close_for_dates(body, dates).or_else(|| closes.last().copied())
+        }
     };
     (value, previous)
 }
@@ -3537,6 +3538,8 @@ mod tests {
         let basis = week_basis(&dates);
         assert!(basis[0].contains("current-week window 2026-04-20..2026-04-21"));
         assert!(basis[1].contains("range=1mo interval=1d"));
+        assert!(basis[1].contains("latest daily close"));
+        assert!(basis[1].contains("regularMarketPrice is fallback only"));
         assert!(basis[2].contains("current local calendar week"));
     }
 
@@ -3633,6 +3636,45 @@ mod tests {
     }
 
     #[test]
+    fn week_change_prefers_daily_close_series_over_market_quote() {
+        let body = r#"{"timestamp":[1776643200,1776729600,1776816000],"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110,121]}]}}"#;
+
+        let (value, previous) = value_and_previous_for_window(
+            body,
+            &close_values(body),
+            &WindowChange::FirstMatchingDate(vec!["2026-04-21".into()]),
+        );
+
+        assert_eq!(value, Some(121.0));
+        assert_eq!(previous, Some(110.0));
+    }
+
+    #[test]
+    fn week_change_without_matching_date_falls_back_to_latest_close() {
+        let body = r#"{"timestamp":[1776643200,1776729600],"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110]}]}}"#;
+
+        let (value, previous) = value_and_previous_for_window(
+            body,
+            &close_values(body),
+            &WindowChange::FirstMatchingDate(vec!["2026-04-24".into()]),
+        );
+
+        assert_eq!(value, Some(110.0));
+        assert_eq!(previous, Some(110.0));
+    }
+
+    #[test]
+    fn regime_change_prefers_weekly_close_series_over_market_quote() {
+        let body = r#"{"meta":{"regularMarketPrice":200,"chartPreviousClose":150},"indicators":{"quote":[{"close":[100,110,121]}]}}"#;
+
+        let (value, previous) =
+            value_and_previous_for_window(body, &close_values(body), &WindowChange::FirstClose);
+
+        assert_eq!(value, Some(121.0));
+        assert_eq!(previous, Some(100.0));
+    }
+
+    #[test]
     fn regime_renders_timeframe_basis_and_boundaries() {
         let regime = compose_test_regime(vec![
             Asset {
@@ -3672,6 +3714,8 @@ mod tests {
         let rendered = render_regime(&regime);
         assert!(rendered.contains("Market Regime"));
         assert!(rendered.contains("1-3 month regime read"));
+        assert!(rendered.contains("latest Yahoo weekly close value"));
+        assert!(rendered.contains("regularMarketPrice is fallback only"));
         assert!(rendered.contains("Next better regime question"));
         assert!(rendered.contains("not investment advice"));
     }
@@ -3711,6 +3755,8 @@ mod tests {
         let rendered = render_week(&week, &events);
         assert!(rendered.contains("Weekly Market Pulse"));
         assert!(rendered.contains("1W Asset Map"));
+        assert!(rendered.contains("latest daily close"));
+        assert!(rendered.contains("regularMarketPrice is fallback only"));
         assert!(rendered.contains("This week's learning loop"));
         assert!(rendered.contains("Recurring journal themes"));
         assert!(rendered.contains("Next week check questions"));

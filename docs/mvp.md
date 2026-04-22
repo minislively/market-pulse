@@ -50,7 +50,7 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Prints a hybrid weekly market-and-learning card distinct from `mp now` and `mp regime`.
-- Uses a current-week market basis by default: local timestamp plus latest Yahoo `regularMarketPrice` vs the first close matching the current local calendar week from `range=1mo&interval=1d`, falling back to the latest available close if the asset has not traded this week.
+- Uses a current-week market basis by default: local timestamp plus latest Yahoo daily close value vs the first close matching the current local calendar week from `range=1mo&interval=1d`, with `regularMarketPrice` as fallback only and latest-close fallback if the asset has not traded this week.
 - Scans the current local calendar week of JSONL journal entries before saving the weekly card.
 - Includes weekly story, explicit basis, 1W asset map, weekly market themes, tensions, journal theme counts, thesis habits, next-week check questions, and a weekly drill.
 - Saves a `week` journal event unless `--no-save` is passed.
@@ -70,7 +70,7 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Prints a broader market regime card distinct from `mp now`.
-- Uses a 1-3 month basis by default: local timestamp plus latest Yahoo `regularMarketPrice` vs first available close from `range=3mo&interval=1wk`.
+- Uses a 1-3 month basis by default: local timestamp plus latest Yahoo weekly close value vs first available weekly close from `range=3mo&interval=1wk`, with `regularMarketPrice` as fallback only.
 - Includes regime label, explicit basis, cross-asset map, regime drivers, tensions, checks, and next better regime question.
 - Saves a `regime` journal event unless `--no-save` is passed.
 - Avoids trading advice.
