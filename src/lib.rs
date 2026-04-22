@@ -1598,7 +1598,7 @@ fn make_inquiry(question: &str, linked: Option<String>) -> Inquiry {
         explanations: possible_explanations(&tags),
         evidence: evidence_checks(&tags),
         counter: counters(&tags),
-        next_question: next_better_question(&tags),
+        next_question: next_better_question_for(&tags, question),
         concepts: concepts(&tags),
         thesis_type,
     }
@@ -1692,7 +1692,7 @@ fn make_feedback(text: &str, linked: Option<String>) -> Feedback {
         good: good(&tags),
         check: evidence_checks(&tags),
         counter: counters(&tags),
-        next: next_questions(&tags),
+        next: next_questions_for(&tags, text),
         concepts: concepts(&tags),
     }
 }
@@ -1778,7 +1778,53 @@ fn push_tag(tags: &mut Vec<&'static str>, tag: &'static str) {
     }
 }
 
-fn validation_questions(tags: &[&str]) -> Vec<String> {
+fn contains_hangul(text: &str) -> bool {
+    text.chars().any(|ch| {
+        ('가'..='힣').contains(&ch) || ('ㄱ'..='ㅎ').contains(&ch) || ('ㅏ'..='ㅣ').contains(&ch)
+    })
+}
+
+fn validation_questions_for(tags: &[&str], korean: bool) -> Vec<String> {
+    if korean {
+        return korean_validation_questions(tags);
+    }
+    english_validation_questions(tags)
+}
+
+fn korean_validation_questions(tags: &[&str]) -> Vec<String> {
+    let mut v = Vec::new();
+    if tags.contains(&"rates") && tags.contains(&"semis") {
+        v.push("성장주 강세가 금리 부담을 흡수한다는 증거는 뭐지?".into());
+        v.push("이 금리/성장주 해석을 틀리게 만들 신호는 뭐지?".into());
+        v.push("실적, 유동성, 수급, 완화 기대 중 대안가설은 뭐지?".into());
+    } else if tags.contains(&"rates") {
+        v.push("완화 기대인지 성장 둔화 매수인지 구분할 증거는 뭐지?".into());
+        v.push("금리·달러·성장주가 엇갈리면 이 해석은 어떻게 깨지지?".into());
+    }
+    if tags.contains(&"fx") && tags.contains(&"korea") {
+        v.push("환율이 한국 리스크를 주도한다는 증거는 뭐지?".into());
+        v.push("원화 약세에도 외국인 매도나 지수 약세가 없으면 어떻게 볼까?".into());
+    } else if tags.contains(&"fx") {
+        v.push("달러 강세가 전반적 유동성 신호라는 증거는 뭐지?".into());
+    }
+    if tags.contains(&"oil") {
+        v.push("유가가 인플레 기대를 바꾸고 있다는 증거는 뭐지?".into());
+    }
+    if tags.contains(&"event") {
+        v.push("상장/이벤트가 원인이면 어떤 자산이 먼저 움직여야 하지?".into());
+        v.push("이벤트 설명을 틀리게 만들 반대 신호는 뭐지?".into());
+    }
+    if tags.contains(&"positioning") {
+        v.push("수급/포지셔닝과 진짜 펀더멘털 변화를 어떻게 구분하지?".into());
+    }
+    if v.is_empty() {
+        v.push("이 해석을 확인할 증거와 틀리게 만들 관찰은 뭐지?".into());
+        v.push("같은 움직임을 설명할 다른 가설은 뭐지?".into());
+    }
+    dedupe_and_limit(v, 4)
+}
+
+fn english_validation_questions(tags: &[&str]) -> Vec<String> {
     let mut v = Vec::new();
     if tags.contains(&"rates") && tags.contains(&"semis") {
         v.push("What evidence shows growth leadership is absorbing rate pressure?".into());
@@ -1816,26 +1862,39 @@ fn validation_questions(tags: &[&str]) -> Vec<String> {
         v.push("What evidence confirms this view, and what observation makes it wrong?".into());
         v.push("What alternative explains the same tape without a one-cause story?".into());
     }
+    dedupe_and_limit(v, 4)
+}
+
+fn dedupe_and_limit(questions: Vec<String>, limit: usize) -> Vec<String> {
     let mut unique = Vec::new();
-    for question in v {
+    for question in questions {
         if !unique.contains(&question) {
             unique.push(question);
         }
     }
-    unique.truncate(4);
+    unique.truncate(limit);
     unique
 }
 
-fn next_questions(tags: &[&str]) -> Vec<String> {
-    validation_questions(tags)
+fn validation_questions(tags: &[&str]) -> Vec<String> {
+    validation_questions_for(tags, false)
 }
 
-fn next_better_question(tags: &[&str]) -> String {
-    validation_questions(tags)
+fn next_questions_for(tags: &[&str], source_text: &str) -> Vec<String> {
+    validation_questions_for(tags, contains_hangul(source_text))
+}
+
+fn next_better_question_for(tags: &[&str], source_text: &str) -> String {
+    validation_questions_for(tags, contains_hangul(source_text))
         .into_iter()
         .next()
         .unwrap_or_else(|| {
-            "What evidence would confirm this interpretation, and what would make it wrong?".into()
+            if contains_hangul(source_text) {
+                "이 해석을 확인할 증거와 틀리게 만들 관찰은 뭐지?".into()
+            } else {
+                "What evidence would confirm this interpretation, and what would make it wrong?"
+                    .into()
+            }
         })
 }
 
@@ -1850,6 +1909,31 @@ fn tags_from_summary(summary: &JournalSummary, limit: usize) -> Vec<&'static str
 }
 
 fn recall_question(query: &str, filter: &str, tags: &[&str]) -> String {
+    if contains_hangul(query) {
+        if tags.contains(&"rates") {
+            return format!(
+                "기간({filter}) 기준으로 예전 \"{query}\" 메모는 완화 기대/성장 둔화/금리 부담 중 뭐였고, 어떤 금리·달러 움직임이 그 해석을 깨지?"
+            );
+        }
+        if tags.contains(&"fx") || tags.contains(&"korea") {
+            return format!(
+                "기간({filter}) 기준으로 \"{query}\"는 달러 압력/한국 리스크/섹터 로테이션 중 뭐였고, 어떤 증거가 그 해석을 반박하지?"
+            );
+        }
+        if tags.contains(&"event") || tags.contains(&"positioning") {
+            return format!(
+                "기간({filter}) 기준으로 \"{query}\"는 이벤트·수급인지 지속 신호인지, 무엇이 시간차 노이즈였음을 보여주지?"
+            );
+        }
+        if tags.contains(&"oil") {
+            return format!(
+                "기간({filter}) 기준으로 \"{query}\"는 인플레/수요/섹터 회전 중 뭐였고, 무엇이 그 경로를 깨지?"
+            );
+        }
+        return format!(
+            "기간({filter}) 기준으로 \"{query}\"를 썼던 때와 지금 무엇이 달라졌고, 어떤 증거가 그 해석을 깨지?"
+        );
+    }
     if tags.contains(&"rates") {
         return format!(
             "In {filter}, did old \"{query}\" notes assume easing, growth scare, or rate pressure—and which yield/dollar move would falsify that read?"
@@ -1878,10 +1962,19 @@ fn recall_question(query: &str, filter: &str, tags: &[&str]) -> String {
 fn review_drill(summary: &JournalSummary) -> String {
     let tags = tags_from_summary(summary, 2);
     let focus = if tags.is_empty() {
-        "your next repeated theme".to_string()
+        if summary.korean_entries > 0 {
+            "다음 반복 테마".to_string()
+        } else {
+            "your next repeated theme".to_string()
+        }
     } else {
         tags.join(" + ")
     };
+    if summary.korean_entries > 0 {
+        return format!(
+            "\nSuggested drill\n  다음 3개 메모에서 {focus}를 검증 루프로 나눠보세요:\n  1. 주장: 내가 말하는 시장 스토리는?\n  2. 증거: 맞다면 다음에 무엇이 움직여야 하지?\n  3. 대안: 같은 흐름을 설명할 다른 가설은?\n  4. 반증: 무엇이 나오면 이 해석을 바꿔야 하지?"
+        );
+    }
     format!(
         "\nSuggested drill\n  For the next 3 notes, run a validation loop on {focus}:\n  1. claim: what story am I telling?\n  2. evidence: what should move next if I am right?\n  3. alternative: what else explains the same tape?\n  4. falsifier: what would make me rename the view?"
     )
@@ -2655,6 +2748,7 @@ struct JournalSummary {
     feedback: usize,
     tag_counts: Vec<(&'static str, usize)>,
     thesis_types: Vec<String>,
+    korean_entries: usize,
 }
 
 fn summarize_events(events: &[String]) -> JournalSummary {
@@ -2676,6 +2770,7 @@ fn summarize_events(events: &[String]) -> JournalSummary {
         ("positioning", 0),
     ];
     let mut thesis_types = Vec::new();
+    let mut korean_entries = 0usize;
     for line in events.iter().filter(|l| {
         l.contains("\"type\":\"thought\"")
             || l.contains("\"type\":\"inquiry\"")
@@ -2684,6 +2779,9 @@ fn summarize_events(events: &[String]) -> JournalSummary {
         let text = json_field(line, "text")
             .or_else(|| json_field(line, "question"))
             .unwrap_or_default();
+        if contains_hangul(&text) {
+            korean_entries += 1;
+        }
         let tags = detect_tags(&text);
         if !tags.is_empty() {
             thesis_types.push(detect_thesis_type(&tags));
@@ -2707,6 +2805,7 @@ fn summarize_events(events: &[String]) -> JournalSummary {
         feedback,
         tag_counts,
         thesis_types,
+        korean_entries,
     }
 }
 
@@ -3183,8 +3282,8 @@ mod tests {
         assert!(f.thesis_type.contains("rates/growth"));
         assert!(f.counter.iter().any(|x| x.contains("Semis strength")));
         assert!(f.check.iter().any(|x| x.to_lowercase().contains("yields")));
-        assert!(f.next.iter().any(|x| x.contains("What evidence")));
-        assert!(f.next.iter().any(|x| x.contains("falsify")));
+        assert!(f.next.iter().any(|x| x.contains("증거")));
+        assert!(f.next.iter().any(|x| x.contains("틀리게")));
     }
 
     #[test]
@@ -3210,9 +3309,9 @@ mod tests {
         assert!(out.contains("Question / thesis habits"));
         assert!(out.contains("event"));
         assert!(out.contains("rates"));
-        assert!(out.contains("validation loop"));
-        assert!(out.contains("alternative"));
-        assert!(out.contains("falsifier"));
+        assert!(out.contains("검증 루프"));
+        assert!(out.contains("대안"));
+        assert!(out.contains("반증"));
     }
 
     #[test]
@@ -3381,7 +3480,7 @@ mod tests {
         assert!(out.contains("Entries matched: 2"));
         assert!(out.contains("Next recall question"));
         assert!(out.contains("this-week 2026-04-20..2026-04-21"));
-        assert!(out.contains("yield/dollar"));
+        assert!(out.contains("금리·달러"));
         assert!(out.contains("local journal only"));
         assert!(out.contains("not live research or trading advice"));
     }
