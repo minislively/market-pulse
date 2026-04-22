@@ -138,7 +138,7 @@ Prints a compact market pulse card:
 
 Live quotes are fetched through the Yahoo Finance chart endpoint by shelling out to `curl`. If a quote fails, the card still renders so the learning loop is not blocked.
 
-`mp now` is a session/daily pulse, not a weekly return screen. The timestamp and session label use the local machine clock, while each percentage move is calculated from Yahoo `regularMarketPrice` versus `chartPreviousClose` from `range=5d&interval=1d` — usually the prior regular-session close for that asset. Because assets trade in different time zones, treat the card as a cross-asset snapshot and use `$mp-research` when the exact session calendar matters.
+`mp now` is a quote-session pulse, not an exact 24-hour, local calendar-day, or weekly return screen. The timestamp and session label use the local machine clock, while each percentage move is calculated from Yahoo `regularMarketPrice` versus `chartPreviousClose` from `range=5d&interval=1d`, falling back to the prior daily close when needed. Because US indices, Korea, FX, futures, and crypto use different clocks, treat the card as a cross-asset directional snapshot and use `$mp-research` when the exact exchange calendar matters.
 
 ### `mp regime`
 
@@ -152,7 +152,7 @@ Prints a broader 1-3 month market regime card:
 - checks for the next session/week
 - next better regime question
 
-`mp regime` is intentionally separate from `mp now`: `now` is a session/daily pulse, while `regime` is the larger backdrop traders compare against short-term moves. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD`, the easier `mp review --days N`, and calendar aliases like `mp review --this-week`; broader search-style review remains a later phase.
+`mp regime` is intentionally separate from `mp now`: `now` is a quote-session pulse, while `regime` is the larger backdrop traders compare against short-term moves. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD`, the easier `mp review --days N`, and calendar aliases like `mp review --this-week`; broader search-style review remains a later phase.
 
 ### `mp week`
 

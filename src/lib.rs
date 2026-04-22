@@ -196,8 +196,8 @@ enum CommandKind {
 
 const PULSE_QUOTE_BASIS: &[&str] = &[
     "time: local machine timestamp and session label",
-    "change: latest Yahoo regularMarketPrice vs chartPreviousClose, usually the prior regular-session close",
-    "window: Yahoo chart range=5d interval=1d; this is a session/daily pulse, not a weekly return",
+    "change: latest Yahoo regularMarketPrice vs chartPreviousClose/fallback prior daily close",
+    "window: Yahoo chart range=5d interval=1d; quote-session pulse, not exact 24h, calendar-day, or weekly return",
 ];
 
 const REGIME_QUOTE_BASIS: &[&str] = &[
@@ -837,7 +837,11 @@ fn build_pulse() -> Pulse {
             }
         }
     }
-    let mut notes = vec!["market quotes from Yahoo Finance chart endpoint via curl".to_string()];
+    let mut notes = vec![
+        "market quotes from Yahoo Finance chart endpoint via curl".to_string(),
+        "mixed sessions: US indices, Korea, FX, futures, and crypto can have different clocks; compare directionally"
+            .to_string(),
+    ];
     if failures > 0 {
         notes.push(format!(
             "{failures} quote(s) unavailable; kept the learning loop alive"
@@ -3580,7 +3584,8 @@ mod tests {
         let rendered = render_pulse(&p, false);
         assert!(rendered.contains("Market puzzle / question seeds"));
         assert!(rendered.contains("Basis"));
-        assert!(rendered.contains("not a weekly return"));
+        assert!(rendered.contains("quote-session pulse"));
+        assert!(rendered.contains("not exact 24h, calendar-day, or weekly return"));
     }
 
     #[test]
