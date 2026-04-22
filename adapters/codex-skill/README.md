@@ -22,7 +22,7 @@ cp adapters/codex-skill/SKILL.md ~/.codex/skills/mp/SKILL.md
 Install the readable alias skills:
 
 ```bash
-for name in mp-now mp-week mp-calendar mp-regime mp-ask mp-research mp-think mp-review; do
+for name in mp-now mp-week mp-calendar mp-regime mp-ask mp-research mp-think mp-review mp-find; do
   mkdir -p "$HOME/.codex/skills/$name"
   cp "adapters/codex-skill/aliases/$name/SKILL.md" "$HOME/.codex/skills/$name/SKILL.md"
 done
@@ -46,6 +46,7 @@ $mp review
 $mp review --date 2026-04-21
 $mp review --days 1
 $mp review --this-week
+$mp find "금리" --this-week
 
 $mp-now
 $mp-week
@@ -58,6 +59,7 @@ $mp-review
 $mp-review --date 2026-04-21
 $mp-review --days 1
 $mp-review --this-week
+$mp-find "금리" --this-week
 ```
 
 ## Contract

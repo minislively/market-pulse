@@ -188,6 +188,7 @@ enum CommandKind {
     Regime,
     Think,
     Review,
+    Find,
     Help,
     Inquiry { text: String, no_save: bool },
     Research { text: String, no_save: bool },
@@ -232,6 +233,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         CommandKind::Regime => regime(&args),
         CommandKind::Think => think(&args),
         CommandKind::Review => review(&args),
+        CommandKind::Find => find(&args),
         CommandKind::Help => {
             print_help();
             Ok(())
@@ -250,6 +252,7 @@ fn parse_command(args: &[String]) -> Result<CommandKind, String> {
         Some("regime") => Ok(CommandKind::Regime),
         Some("think") => Ok(CommandKind::Think),
         Some("review") => Ok(CommandKind::Review),
+        Some("find") | Some("search") => Ok(CommandKind::Find),
         Some("help") | Some("--help") | Some("-h") => Ok(CommandKind::Help),
         Some("ask") => inquiry_command(&args[1..], "`mp ask` needs a question"),
         Some("research") => research_command(&args[1..], "`mp research` needs a question"),
@@ -293,7 +296,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]"
     );
 }
 
@@ -593,6 +596,79 @@ fn review(args: &[String]) -> Result<(), String> {
     };
     println!("{rendered}");
     Ok(())
+}
+
+fn find(args: &[String]) -> Result<(), String> {
+    let parsed = parse_find_args(args)?;
+    let rendered = render_find(parsed.limit, &parsed.query, parsed.filter.as_ref());
+    println!("{rendered}");
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct FindArgs {
+    query: String,
+    limit: usize,
+    filter: Option<ReviewFilter>,
+}
+
+fn parse_find_args(args: &[String]) -> Result<FindArgs, String> {
+    let mut limit = 20usize;
+    let mut filter: Option<ReviewFilter> = None;
+    let mut query_parts = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--limit" {
+            let Some(raw) = args.get(i + 1) else {
+                return Err("--limit needs a number".into());
+            };
+            limit = raw
+                .parse()
+                .map_err(|_| "--limit must be a number".to_string())?;
+            i += 2;
+            continue;
+        }
+        if args[i] == "--date" {
+            let Some(raw) = args.get(i + 1) else {
+                return Err("--date needs YYYY-MM-DD".into());
+            };
+            validate_review_date(raw)?;
+            set_review_filter(&mut filter, ReviewFilter::Date(raw.clone()))?;
+            i += 2;
+            continue;
+        }
+        if matches!(args[i].as_str(), "--days" | "--ago" | "--days-ago") {
+            let Some(raw) = args.get(i + 1) else {
+                return Err(format!("{} needs a number of days", args[i]));
+            };
+            let days = parse_review_days_ago(raw)?;
+            set_review_filter(&mut filter, ReviewFilter::Date(date_for_days_ago(days)?))?;
+            i += 2;
+            continue;
+        }
+        if matches!(
+            args[i].as_str(),
+            "--today" | "--yesterday" | "--this-week" | "--last-week"
+        ) {
+            set_review_filter(&mut filter, review_filter_for_alias(&args[i])?)?;
+            i += 1;
+            continue;
+        }
+        if args[i].starts_with('-') {
+            return Err(format!("unknown find option '{}'", args[i]));
+        }
+        query_parts.push(args[i].clone());
+        i += 1;
+    }
+    let query = query_parts.join(" ").trim().to_string();
+    if query.is_empty() {
+        return Err("`mp find` needs a journal search query".into());
+    }
+    Ok(FindArgs {
+        query,
+        limit,
+        filter,
+    })
 }
 
 fn set_review_filter(filter: &mut Option<ReviewFilter>, next: ReviewFilter) -> Result<(), String> {
@@ -2230,6 +2306,14 @@ fn read_events_for_dates(limit: usize, dates: &[String]) -> Vec<String> {
     filter_events_by_dates(read_event_lines(&text), dates, limit)
 }
 
+fn read_events_for_filter(limit: usize, filter: Option<&ReviewFilter>) -> Vec<String> {
+    match filter {
+        Some(ReviewFilter::Date(date)) => read_events_for_date(limit, date),
+        Some(ReviewFilter::Dates { dates, .. }) => read_events_for_dates(limit, dates),
+        None => read_events(limit),
+    }
+}
+
 fn filter_events_by_date(events: Vec<String>, date: &str, limit: usize) -> Vec<String> {
     let lines = events
         .into_iter()
@@ -2333,6 +2417,37 @@ fn render_review_for_dates(limit: usize, label: &str, dates: &[String]) -> Strin
     render_review_for_dates_from_events(&events, &journal_path().display().to_string(), label)
 }
 
+fn render_find(limit: usize, query: &str, filter: Option<&ReviewFilter>) -> String {
+    let events = find_events(limit, query, filter);
+    render_find_from_events(
+        &events,
+        &journal_path().display().to_string(),
+        query,
+        filter_label(filter),
+    )
+}
+
+fn find_events(limit: usize, query: &str, filter: Option<&ReviewFilter>) -> Vec<String> {
+    let query = query.to_lowercase();
+    read_events_for_filter(usize::MAX, filter)
+        .into_iter()
+        .filter(|line| line.to_lowercase().contains(&query))
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn filter_label(filter: Option<&ReviewFilter>) -> String {
+    match filter {
+        Some(ReviewFilter::Date(date)) => format!("date {date}"),
+        Some(ReviewFilter::Dates { label, .. }) => label.clone(),
+        None => "all journal entries".into(),
+    }
+}
+
 fn render_review_for_date_from_events(events: &[String], journal: &str, date: &str) -> String {
     if events.is_empty() {
         return format!(
@@ -2353,6 +2468,83 @@ fn render_review_for_dates_from_events(events: &[String], journal: &str, label: 
     let mut out = format!("Review period filter: {label}\n\n");
     out.push_str(&render_review_from_events(events, journal));
     out
+}
+
+fn render_find_from_events(
+    events: &[String],
+    journal: &str,
+    query: &str,
+    filter: String,
+) -> String {
+    if events.is_empty() {
+        return format!(
+            "No market-pulse journal entries matched \"{query}\".\n\nJournal: {journal}\nFilter: {filter}\nTry a simpler keyword, `mp calendar` for date windows, or record one with `mp ask`, `mp research`, or `mp think`."
+        );
+    }
+
+    let summary = summarize_events(events);
+    let mut out = format!(
+        "Market Pulse Find\n\nQuery: \"{query}\"\nFilter: {filter}\nJournal: {journal}\nEntries matched: {} · pulses {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nMatches\n",
+        events.len(),
+        summary.pulses,
+        summary.weeks,
+        summary.regimes,
+        summary.inquiries,
+        summary.research_inquiries,
+        summary.thoughts,
+        summary.feedback
+    );
+    for line in events.iter().rev().take(12) {
+        out.push_str(&format!("  - {}\n", event_recall_snippet(line, query)));
+    }
+
+    out.push_str("\nRecurring themes in matches\n");
+    let mut wrote_theme = false;
+    for (tag, count) in summary
+        .tag_counts
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .take(4)
+    {
+        wrote_theme = true;
+        out.push_str(&format!("  - {tag}: {count}\n"));
+    }
+    if !wrote_theme {
+        out.push_str("  - Not enough tagged matching entries yet\n");
+    }
+    out.push_str(&format!(
+        "\nNext recall question\n  What changed since you last wrote about \"{query}\", and what would falsify that old interpretation now?\n\nBoundary\n  `mp find` searches your local journal only. It is recall support for market literacy, not live research or trading advice."
+    ));
+    out
+}
+
+fn event_recall_snippet(line: &str, query: &str) -> String {
+    let timestamp = json_field(line, "timestamp").unwrap_or_else(|| "unknown-time".into());
+    let event_type = json_field(line, "type").unwrap_or_else(|| "entry".into());
+    let body = json_field(line, "text")
+        .or_else(|| json_field(line, "question"))
+        .or_else(|| json_field(line, "mood"))
+        .or_else(|| json_field(line, "concept"))
+        .or_else(|| json_field(line, "source_titles"))
+        .unwrap_or_else(|| compact_raw_event(line));
+    format!(
+        "{timestamp} · {event_type} · {}",
+        compact_snippet(&body, query)
+    )
+}
+
+fn compact_raw_event(line: &str) -> String {
+    compact_snippet(line, "")
+}
+
+fn compact_snippet(text: &str, _query: &str) -> String {
+    let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let max_chars = 140usize;
+    if cleaned.chars().count() <= max_chars {
+        return cleaned;
+    }
+    let snippet = cleaned.chars().take(max_chars).collect::<String>();
+    format!("{snippet}...")
 }
 
 #[derive(Clone, Debug)]
@@ -2637,6 +2829,18 @@ mod tests {
         assert_eq!(
             parse_command(&["cal".into()]).unwrap(),
             CommandKind::Calendar
+        );
+    }
+
+    #[test]
+    fn routes_find_to_find_command() {
+        assert_eq!(
+            parse_command(&["find".into(), "금리".into()]).unwrap(),
+            CommandKind::Find
+        );
+        assert_eq!(
+            parse_command(&["search".into(), "달러".into()]).unwrap(),
+            CommandKind::Find
         );
     }
 
@@ -3010,6 +3214,89 @@ mod tests {
         assert!(out.contains("mp review --this-week"));
         assert!(out.contains("not fuzzy full-text search"));
         assert!(out.contains("not exchange-holiday calendars"));
+    }
+
+    #[test]
+    fn find_args_collect_query_and_period_selector() {
+        let args = vec![
+            "find".into(),
+            "금리".into(),
+            "성장주".into(),
+            "--this-week".into(),
+            "--limit".into(),
+            "3".into(),
+        ];
+        let parsed = parse_find_args(&args).unwrap();
+        assert_eq!(parsed.query, "금리 성장주");
+        assert_eq!(parsed.limit, 3);
+        match parsed.filter.unwrap() {
+            ReviewFilter::Dates { label, dates } => {
+                assert!(label.starts_with("this-week"));
+                assert!(!dates.is_empty());
+            }
+            ReviewFilter::Date(_) => panic!("expected period filter"),
+        }
+    }
+
+    #[test]
+    fn find_rejects_empty_query_and_multiple_selectors() {
+        assert!(parse_find_args(&["find".into(), "--this-week".into()]).is_err());
+        assert!(parse_find_args(&[
+            "find".into(),
+            "달러".into(),
+            "--today".into(),
+            "--last-week".into(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn find_events_filters_by_query_after_date_window() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-19T09:00:00+0900\",\"text\":\"지난주 유가와 달러\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"이번주 금리와 성장주\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"달러가 코스피에 부담?\",\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
+        ];
+        let dates = vec!["2026-04-20".into(), "2026-04-21".into()];
+        let filtered = filter_events_by_dates(events, &dates, 10);
+        let found = filtered
+            .into_iter()
+            .filter(|line| line.to_lowercase().contains("달러"))
+            .collect::<Vec<_>>();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("코스피"));
+    }
+
+    #[test]
+    fn find_renders_recall_card_and_boundary() {
+        let events = vec![
+            "{\"type\":\"thought\",\"timestamp\":\"2026-04-20T10:00:00+0900\",\"text\":\"이번주 금리와 성장주 긴장\",\"linked_pulse_timestamp\":null}".into(),
+            "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-21T11:00:00+0900\",\"question\":\"금리 하락이 성장주에 좋은 신호임?\",\"thesis_type\":\"rates / policy-expectation thesis\",\"concepts\":\"rates policy\"}".into(),
+        ];
+        let out = render_find_from_events(
+            &events,
+            "/tmp/journal.jsonl",
+            "금리",
+            "this-week 2026-04-20..2026-04-21".into(),
+        );
+        assert!(out.contains("Market Pulse Find"));
+        assert!(out.contains("Query: \"금리\""));
+        assert!(out.contains("Entries matched: 2"));
+        assert!(out.contains("Next recall question"));
+        assert!(out.contains("local journal only"));
+        assert!(out.contains("not live research or trading advice"));
+    }
+
+    #[test]
+    fn find_empty_result_points_to_calendar() {
+        let out = render_find_from_events(
+            &[],
+            "/tmp/journal.jsonl",
+            "반도체",
+            "last-week 2026-04-13..2026-04-19".into(),
+        );
+        assert!(out.contains("No market-pulse journal entries matched"));
+        assert!(out.contains("mp calendar"));
     }
 
     #[test]

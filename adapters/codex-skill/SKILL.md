@@ -1,7 +1,7 @@
 ---
 name: mp
-description: "Run market-pulse CLI commands for terminal-native market inquiry, research-backed inquiry scaffolds, market context, weekly learning, calendar windows, user-thought feedback, and review. Use when the user says $mp, mp <question>, mp ask, mp research, mp now, mp week, mp calendar, mp regime, mp think, mp review, 오늘 시황, 시장 펄스, or asks for market-thinking feedback."
-argument-hint: "[question]|ask [question]|research [question]|now|week|calendar|regime|think|review [selector]"
+description: "Run market-pulse CLI commands for terminal-native market inquiry, research-backed inquiry scaffolds, market context, weekly learning, calendar windows, local journal recall, user-thought feedback, and review. Use when the user says $mp, mp <question>, mp ask, mp research, mp now, mp week, mp calendar, mp regime, mp think, mp review, mp find, 오늘 시황, 시장 펄스, or asks for market-thinking feedback."
+argument-hint: "[question]|ask [question]|research [question]|now|week|calendar|regime|think|review [selector]|find [query]"
 ---
 
 Use the local `mp` CLI. Keep this skill thin: do not reimplement market-pulse in the prompt.
@@ -21,6 +21,7 @@ Use the local `mp` CLI. Keep this skill thin: do not reimplement market-pulse in
 - `$mp review --date YYYY-MM-DD` -> run `mp review --date YYYY-MM-DD`
 - `$mp review --days N` -> run `mp review --days N`
 - `$mp review --today|--yesterday|--this-week|--last-week` -> run the same `mp review` selector
+- `$mp find <query> [selector]` -> run `mp find "<query>" [selector]`
 
 Readable alias skills are also available when installed from `adapters/codex-skill/aliases/`:
 
@@ -32,6 +33,7 @@ Readable alias skills are also available when installed from `adapters/codex-ski
 - `$mp-research <question>` -> run `mp research "<question>"`
 - `$mp-think <text>` -> run `mp think "<text>"`
 - `$mp-review` -> run `mp review`, `mp review --date YYYY-MM-DD`, `mp review --days N`, or a small period selector such as `mp review --this-week` when supplied
+- `$mp-find <query>` -> run `mp find "<query>"` with optional date/window selectors
 
 If the user invokes `$mp` without arguments, treat it as `$mp now`.
 

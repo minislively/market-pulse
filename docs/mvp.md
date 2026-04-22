@@ -84,6 +84,17 @@ Acceptance criteria:
 - Saves both thought and feedback unless `--no-save` is passed.
 - Avoids trading advice.
 
+### `mp find "query"`
+
+Acceptance criteria:
+
+- Searches local JSONL journal entries by explicit query.
+- Supports `--date YYYY-MM-DD`, `--days N`, `--today`, `--yesterday`, `--this-week`, `--last-week`, and `--limit N`.
+- Uses the same single-selector conflict rule as `mp review`.
+- Renders a recall card with query, filter basis, matching entries, matched event counts, recurring themes, next recall question, and a local-journal-only boundary.
+- Shows a helpful empty result when no entries match.
+- Avoids fuzzy natural-language date parsing, exchange calendars, live provider changes, semantic/vector search, and trading advice.
+
 ### `mp review`
 
 Acceptance criteria:

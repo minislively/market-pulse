@@ -30,9 +30,10 @@ Initial code may keep these simple, but the boundaries should stay visible:
 - research inquiry hooks: source metadata, source-backed claims, no-source fallback, data-to-check prompts
 - weekly hooks: current-local-week market story, current-week journal summary, next-week check questions
 - calendar hooks: local-date windows for today/yesterday/this-week/last-week and explicit review shortcuts
+- recall hooks: local journal full-text search, date/window filters, match snippets, recurring themes, next recall question
 - feedback hooks: claim extraction, thesis typing, evidence checks, counter-view, next question, concept linking
 - renderer hooks: terminal, compact, markdown, JSON
-- memory hooks: JSONL first, SQLite later if needed
+- memory hooks: JSONL first, local journal recall/search, SQLite later if needed
 
 ## Environment adapters
 
@@ -40,8 +41,8 @@ Adapters should call the standalone `mp` CLI instead of making the core depend o
 
 Planned or current adapters:
 
-- Codex skill: `$mp <question>`, `$mp ask ...`, `$mp research ...`, `$mp now`, `$mp week`, `$mp calendar`, `$mp regime`, `$mp think ...`, `$mp review`
-- Claude Code slash command: `/mp <question>`, `/mp ask ...`, `/mp research ...`, `/mp now`, `/mp week`, `/mp calendar`, `/mp regime`, `/mp think ...`, `/mp review`
+- Codex skill: `$mp <question>`, `$mp ask ...`, `$mp research ...`, `$mp now`, `$mp week`, `$mp calendar`, `$mp regime`, `$mp think ...`, `$mp review`, `$mp find ...`
+- Claude Code slash command: `/mp <question>`, `/mp ask ...`, `/mp research ...`, `/mp now`, `/mp week`, `/mp calendar`, `/mp regime`, `/mp think ...`, `/mp review`, `/mp find ...`
 - OMX hook: optional compact pulse at session start or long task completion
 - tmux popup/status: optional compact pulse
 - cron/launchd: optional scheduled snapshots

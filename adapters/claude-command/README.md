@@ -33,6 +33,7 @@ Then in Claude Code:
 /mp review --date 2026-04-21
 /mp review --days 1
 /mp review --this-week
+/mp find 금리 --this-week
 ```
 
 ## Contract

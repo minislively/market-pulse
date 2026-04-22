@@ -18,6 +18,7 @@ mp review
 mp review --date 2026-04-21
 mp review --days 1
 mp review --this-week
+mp find "금리" --this-week
 ```
 
 ## North star
@@ -198,6 +199,28 @@ Records your market interpretation and returns structured feedback:
 - next observation question
 - related concepts
 
+### `mp find "query"`
+
+Searches your local market-pulse journal and renders a recall card, not just raw grep output:
+
+- explicit query and date/window basis
+- matching entries with timestamp/type snippets
+- matched event counts
+- recurring themes in matches
+- next recall question
+- local-journal-only boundary
+
+Examples:
+
+```bash
+mp find "금리"
+mp find "달러" --this-week
+mp find "유가" --last-week
+mp find "반도체" --days 3 --limit 5
+```
+
+`mp search` is accepted as a thin alias for `mp find`. The first pass is intentionally explicit: it does not parse arbitrary natural-language dates, does not use exchange calendars, does not call live web providers, and does not add semantic/vector search.
+
 ### `mp review`
 
 Reviews recent pulses, regimes, inquiries, thoughts, and feedback to surface recurring themes, question habits, and reasoning drills.
@@ -233,6 +256,7 @@ $mp-review
 $mp-review --date 2026-04-21
 $mp-review --days 1
 $mp-review --this-week
+$mp-find "금리" --this-week
 ```
 
 These aliases are thin wrappers around the same local `mp` binary:
@@ -245,6 +269,7 @@ These aliases are thin wrappers around the same local `mp` binary:
 - `$mp-research` -> `mp research`
 - `$mp-think` -> `mp think`
 - `$mp-review` -> `mp review`, `mp review --date YYYY-MM-DD`, `mp review --days N`, or a small period alias such as `mp review --this-week`
+- `$mp-find` -> `mp find`, optionally with the same small date/window selectors
 
 The canonical `$mp ...` skill remains available for flexible calls. The aliases
 are explicit only: they do not auto-capture arbitrary market/economy sentences,
