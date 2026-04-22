@@ -1330,22 +1330,33 @@ fn infer_week_tensions(assets: &[Asset], label: &str) -> Vec<String> {
 
 fn infer_week_questions(assets: &[Asset], label: &str, tensions: &[String]) -> Vec<String> {
     let text = format!("{label} {}", tensions.join(" ")).to_lowercase();
-    let mut questions = Vec::new();
-    if text.contains("financial-condition") || text.contains("rates") {
-        questions.push("Next week, do yields/dollar confirm or fight the equity story?".into());
+    let mut tags = detect_tags(&text);
+    if text.contains("financial-condition")
+        || text.contains("rates")
+        || change_for(assets, "^TNX").is_some()
+    {
+        push_tag(&mut tags, "rates");
     }
-    if text.contains("nasdaq") || text.contains("growth") {
-        questions.push("Is leadership broadening beyond growth/AI, or still narrow?".into());
+    if text.contains("nasdaq") || text.contains("growth") || text.contains("ai") {
+        push_tag(&mut tags, "semis");
     }
     if text.contains("korea") || change_for(assets, "^KS11").is_some() {
-        questions
-            .push("Does KOSPI confirm the US story, or is FX/EM pressure still a drag?".into());
+        push_tag(&mut tags, "korea");
+    }
+    if text.contains("fx")
+        || text.contains("dollar")
+        || change_for(assets, "DX-Y.NYB").is_some()
+        || change_for(assets, "KRW=X").is_some()
+    {
+        push_tag(&mut tags, "fx");
     }
     if text.contains("oil") || change_for(assets, "CL=F").is_some_and(|v| v.abs() > 4.0) {
-        questions
-            .push("Is oil changing inflation expectations, or staying sector-specific?".into());
+        push_tag(&mut tags, "oil");
     }
-    questions.push("What would make you rename this week’s market story by next Friday?".into());
+    let mut questions = validation_questions(&tags);
+    questions.push(
+        "By next Friday, what evidence would force you to rename this week’s market story?".into(),
+    );
     let mut unique = Vec::new();
     for question in questions {
         if !unique.contains(&question) {
@@ -1762,37 +1773,114 @@ fn counters(tags: &[&str]) -> Vec<String> {
     v
 }
 
-fn next_questions(tags: &[&str]) -> Vec<String> {
+fn push_tag(tags: &mut Vec<&'static str>, tag: &'static str) {
+    if !tags.contains(&tag) {
+        tags.push(tag);
+    }
+}
+
+fn validation_questions(tags: &[&str]) -> Vec<String> {
     let mut v = Vec::new();
     if tags.contains(&"rates") && tags.contains(&"semis") {
-        v.push("If yields rise further, do semis still outperform the broad market?".into());
+        v.push("What evidence would prove growth leadership is absorbing rate pressure rather than just ignoring it for one session?".into());
+        v.push("What would falsify the rates/growth story: higher yields with semis still leading, or lower yields with weak breadth?".into());
+        v.push("What alternative fits the same tape better: earnings momentum, liquidity, positioning, or genuine easing expectations?".into());
     } else if tags.contains(&"rates") {
-        v.push("If this is really easing expectations, should growth assets, the dollar, and yields confirm together?".into());
+        v.push(
+            "What would confirm this is easing expectations rather than growth-scare bond buying?"
+                .into(),
+        );
+        v.push("What would falsify the rates story if yields, dollar, and growth assets stop confirming each other?".into());
     }
     if tags.contains(&"fx") && tags.contains(&"korea") {
-        v.push("Does KRW weakness coincide with foreign selling, or are exporters offsetting the pressure?".into());
+        v.push("What evidence would show FX is driving Korea risk rather than only translating a global move?".into());
+        v.push("What would falsify the FX-pressure read: KRW weakness without foreign selling, or exporters offsetting the drag?".into());
+    } else if tags.contains(&"fx") {
+        v.push("What would prove dollar strength is a market-wide liquidity signal rather than a local currency move?".into());
     }
     if tags.contains(&"oil") {
-        v.push("Is oil moving enough to change inflation expectations, or is it only a sector input today?".into());
+        v.push("What evidence would show oil is changing inflation expectations instead of staying sector-specific?".into());
     }
     if tags.contains(&"event") {
-        v.push("What market segment should move first if the IPO/event explanation is actually driving the session?".into());
+        v.push("What should move first if the IPO/listing/event explanation is actually driving the session?".into());
+        v.push("What would falsify the event story: broad assets moving before the event, or unrelated sectors leading?".into());
     }
     if tags.contains(&"positioning") {
-        v.push("What would distinguish positioning from a real change in growth, rates, or earnings expectations?".into());
+        v.push("What would distinguish positioning or flow from a real change in growth, rates, or earnings expectations?".into());
     }
     if v.is_empty() {
-        v.push(
-            "What would you need to see by the close to say this interpretation was wrong?".into(),
-        );
+        v.push("What evidence would confirm this interpretation, and what single observation would make it wrong?".into());
+        v.push("What alternative explanation could fit the same price action without forcing a one-cause story?".into());
     }
-    v
+    let mut unique = Vec::new();
+    for question in v {
+        if !unique.contains(&question) {
+            unique.push(question);
+        }
+    }
+    unique.truncate(4);
+    unique
+}
+
+fn next_questions(tags: &[&str]) -> Vec<String> {
+    validation_questions(tags)
 }
 
 fn next_better_question(tags: &[&str]) -> String {
-    next_questions(tags).into_iter().next().unwrap_or_else(|| {
-        "What evidence would make this market interpretation wrong by the close?".into()
-    })
+    validation_questions(tags)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| {
+            "What evidence would confirm this interpretation, and what would make it wrong?".into()
+        })
+}
+
+fn tags_from_summary(summary: &JournalSummary, limit: usize) -> Vec<&'static str> {
+    summary
+        .tag_counts
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .take(limit)
+        .map(|(tag, _)| *tag)
+        .collect()
+}
+
+fn recall_question(query: &str, filter: &str, tags: &[&str]) -> String {
+    if tags.contains(&"rates") {
+        return format!(
+            "In {filter}, were your old \"{query}\" notes assuming easing, growth scare, or rate pressure—and which current yield/dollar move would falsify that read?"
+        );
+    }
+    if tags.contains(&"fx") || tags.contains(&"korea") {
+        return format!(
+            "In {filter}, did \"{query}\" mean global dollar pressure, Korea-specific stress, or sector rotation—and what current evidence would disprove it?"
+        );
+    }
+    if tags.contains(&"event") || tags.contains(&"positioning") {
+        return format!(
+            "In {filter}, was \"{query}\" an event/flow explanation or a durable market signal—and what would prove that old read was just timing noise?"
+        );
+    }
+    if tags.contains(&"oil") {
+        return format!(
+            "In {filter}, did \"{query}\" point to inflation pressure, demand, or sector rotation—and what would falsify that channel now?"
+        );
+    }
+    format!(
+        "In {filter}, what changed since you last wrote about \"{query}\", and what evidence would falsify that old interpretation now?"
+    )
+}
+
+fn review_drill(summary: &JournalSummary) -> String {
+    let tags = tags_from_summary(summary, 2);
+    let focus = if tags.is_empty() {
+        "your next repeated theme".to_string()
+    } else {
+        tags.join(" + ")
+    };
+    format!(
+        "\nSuggested drill\n  For the next 3 notes, run a validation loop on {focus}:\n  1. claim: what market story am I telling?\n  2. confirming evidence: which asset/event should move next if I am right?\n  3. alternative: what else could explain the same tape?\n  4. falsifier: what observation would make me rename the view?"
+    )
 }
 
 fn concepts(tags: &[&str]) -> Vec<String> {
@@ -2502,7 +2590,7 @@ fn render_find_from_events(
     let mut wrote_theme = false;
     for (tag, count) in summary
         .tag_counts
-        .into_iter()
+        .iter()
         .filter(|(_, count)| *count > 0)
         .take(4)
     {
@@ -2512,8 +2600,13 @@ fn render_find_from_events(
     if !wrote_theme {
         out.push_str("  - Not enough tagged matching entries yet\n");
     }
+    let mut recall_tags = detect_tags(query);
+    for tag in tags_from_summary(&summary, 2) {
+        push_tag(&mut recall_tags, tag);
+    }
+    let question = recall_question(query, &filter, &recall_tags);
     out.push_str(&format!(
-        "\nNext recall question\n  What changed since you last wrote about \"{query}\", and what would falsify that old interpretation now?\n\nBoundary\n  `mp find` searches your local journal only. It is recall support for market literacy, not live research or trading advice."
+        "\nNext recall question\n  {question}\n\nBoundary\n  `mp find` searches your local journal only. It is recall support for market literacy, not live research or trading advice."
     ));
     out
 }
@@ -2625,12 +2718,7 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
     let summary = summarize_events(events);
     let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), summary.pulses, summary.weeks, summary.regimes, summary.inquiries, summary.research_inquiries, summary.thoughts, summary.feedback);
     let mut wrote = false;
-    for (tag, count) in summary
-        .tag_counts
-        .into_iter()
-        .filter(|(_, c)| *c > 0)
-        .take(6)
-    {
+    for (tag, count) in summary.tag_counts.iter().filter(|(_, c)| *c > 0).take(6) {
         wrote = true;
         out.push_str(&format!("  - {tag}: {count}\n"));
     }
@@ -2645,7 +2733,7 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
             out.push_str(&format!("  - You have been using a {t} lens.\n"));
         }
     }
-    out.push_str("\nSuggested drill\n  For the next 3 notes, explicitly separate:\n  1. market-wide signal\n  2. sector-specific signal\n  3. event/positioning alternative\n  4. what would falsify the view");
+    out.push_str(&review_drill(&summary));
     out
 }
 
@@ -3091,6 +3179,8 @@ mod tests {
         assert!(f.thesis_type.contains("rates/growth"));
         assert!(f.counter.iter().any(|x| x.contains("Semis strength")));
         assert!(f.check.iter().any(|x| x.to_lowercase().contains("yields")));
+        assert!(f.next.iter().any(|x| x.contains("What evidence")));
+        assert!(f.next.iter().any(|x| x.contains("falsify")));
     }
 
     #[test]
@@ -3116,6 +3206,9 @@ mod tests {
         assert!(out.contains("Question / thesis habits"));
         assert!(out.contains("event"));
         assert!(out.contains("rates"));
+        assert!(out.contains("validation loop"));
+        assert!(out.contains("alternative"));
+        assert!(out.contains("falsifier"));
     }
 
     #[test]
@@ -3283,6 +3376,8 @@ mod tests {
         assert!(out.contains("Query: \"금리\""));
         assert!(out.contains("Entries matched: 2"));
         assert!(out.contains("Next recall question"));
+        assert!(out.contains("this-week 2026-04-20..2026-04-21"));
+        assert!(out.contains("yield/dollar"));
         assert!(out.contains("local journal only"));
         assert!(out.contains("not live research or trading advice"));
     }
@@ -3467,6 +3562,8 @@ mod tests {
         assert!(rendered.contains("This week's learning loop"));
         assert!(rendered.contains("Recurring journal themes"));
         assert!(rendered.contains("Next week check questions"));
+        assert!(rendered.contains("evidence"));
+        assert!(rendered.contains("rename this week"));
         assert!(rendered.contains("rates"));
         assert!(rendered.contains("not investment advice"));
     }
