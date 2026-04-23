@@ -9,7 +9,14 @@ mp "금리가 내려간 게 진짜 완화 기대 때문임?"
 mp research "금리 하락이 성장주에 좋은 신호임?"
 mp "대형 IPO 때문에 성장주가 강한 걸까?" --research
 mp ask "대형 IPO 때문에 성장주가 강한 걸까?"
+mp 오늘 시황
+mp NVDA
+mp NVDA 리서치
+mp 전에 금리 찾아줘 --limit 3
+mp 이번주 복기
 mp now
+mp watch
+mp fomo
 mp week
 mp calendar
 mp regime
@@ -63,6 +70,36 @@ Explicit alias for the same inquiry flow:
 ```bash
 mp ask "대형 IPO가 시장 상승 이유가 될 수 있음?"
 ```
+
+### Natural Korean/ticker aliases
+
+The CLI includes a small deterministic router for common Korean daily-use
+phrases and ticker/company/asset-like text. It is an alias layer, not a full
+NLP engine:
+
+```bash
+mp 오늘 시황              # same current-market card as mp now
+mp 지금 시장
+mp 시장 펄스
+mp 이번주                # same weekly card as mp week
+mp 레짐                  # same broader backdrop card as mp regime
+mp 캘린더                # same local calendar card as mp calendar
+mp 오늘 복기             # normalized to mp review --today
+mp 지난주 리뷰 --limit 5 # normalized to mp review --last-week --limit 5
+mp 전에 금리 찾아줘      # normalized to mp find "금리"
+mp 내 생각 나스닥은 너무 오른듯
+mp NVDA                  # safe inquiry scaffold
+mp 비트코인              # safe inquiry scaffold
+mp NVDA 리서치           # source-aware research scaffold
+mp 반도체 왜 오름?       # source-aware research scaffold
+```
+
+Explicit commands still win. For example, `mp now 리서치` remains `mp now`,
+while `mp 오늘 시황 근거` and `mp 오늘 시황 --research` intentionally route to
+research mode. Ticker/company/asset-like text by itself stays in the safe local
+inquiry scaffold; source-aware output requires `research`, `--research`, or an
+evidence/source marker such as `리서치`, `근거`, `출처`, `왜`, `뉴스`, `자료`, or
+`확인`, `팩트체크`.
 
 ### `mp research "question"` / `mp "question" --research`
 
@@ -132,13 +169,47 @@ Prints a compact market pulse card:
 
 - market mood
 - asset pressure
+- Semis (`^SOX`) as a non-compact semiconductor index proxy, not a full AI basket
 - likely tensions
 - market puzzle / question seeds
 - one concept to watch
+- a six-line Daily Decision Checklist in non-compact output: scenario,
+  confirm, falsify, watch, discipline, and journal prompt
 
 Live quotes are fetched through the Yahoo Finance chart endpoint by shelling out to `curl`. If a quote fails, the card still renders so the learning loop is not blocked.
 
 `mp now` is a close-to-close pulse, not a high/low gap, exact 24-hour, local calendar-day, or weekly return screen. The timestamp and session label use the local machine clock, while each percentage move is calculated from Yahoo `range=5d&interval=1d` daily closes: latest daily close value versus prior daily close. `regularMarketPrice` is fallback only when the close series is unavailable. Because US indices, Korea, FX, futures, and crypto use different clocks, treat the card as a cross-asset directional snapshot and use `$mp-research` when the exact exchange calendar matters.
+
+The Daily Decision Checklist is an observation and journaling routine, not a
+trade instruction. It helps name a scenario, define confirmation/falsification,
+watch cross-asset relationships, and write a `mp think` note before forming a
+market view. When `^SOX` data is available, the checklist may use Semis-led
+scenario language; without that data it falls back to non-semis wording. `mp now
+--compact` remains a one-line pulse and does not render the checklist.
+
+### `mp watch`
+
+Prints a Daily Radar card for the “what should I keep in mind today?” use case:
+
+- current mood and quote/change basis
+- scenario / watch / confirm / falsify lines derived from the same cross-asset pulse logic as `mp now`
+- a short driver/tension summary
+- a FOMO checkpoint prompt that separates evidence from opportunity-cost fear
+- explicit boundary: reasoning support only, no trading instructions
+
+`mp watch` saves a `radar` journal event unless `--no-save` is passed. The saved event is intentionally compact JSONL: timestamp, linked pulse timestamp, mood, scenario, confirm, falsify, watch, and prompt. It is designed to make `mp review` / `mp find` catch daily market context later without requiring a daemon, OS push notification, external messenger, paid API, or GUI.
+
+### `mp fomo`
+
+Prints a lightweight FOMO checkpoint for moments when the tape feels hard to ignore:
+
+- latest saved radar and pulse timestamps when available
+- latest scenario carried forward from `mp watch`
+- pause questions: what exactly am I reacting to, what confirms it, what falsifies it, and is this evidence or opportunity-cost fear?
+- a next journal prompt for `mp think`
+- explicit boundary: reasoning support only, no trading instructions
+
+`mp fomo` saves a `fomo_check` journal event unless `--no-save` is passed. If no prior radar exists, it still renders a useful pause card and suggests running `mp watch` for a fresh context card.
 
 ### `mp regime`
 
@@ -170,16 +241,23 @@ Prints a hybrid weekly market-and-learning card:
 
 ### `mp calendar`
 
-Prints the local-date windows market-pulse uses for review shortcuts:
+Prints a compact market-calendar report. It still shows the local-date windows
+market-pulse uses for journal review, but now adds static exchange-session
+context so `mp now` / `mp week` close-based readings are easier to interpret:
 
 - today
 - yesterday
 - this-week
 - last-week
+- US equities (NYSE/Nasdaq) regular-session reference: 09:30-16:00 ET
+- Korea equities (KRX/KOSPI) regular-session reference: 09:00-15:30 KST
+- a calendar-to-pulse bridge for daily close-to-close and current-week close basis
 - matching `mp review` shortcut commands
-- explicit boundary that these are local-date helpers, not exchange-holiday calendars or trading signals
+- explicit boundary that this is a static MVP, not a full official
+  holiday/early-close calendar, live event calendar, or trading signal
 
-Use it when you forget which date window a shortcut means:
+Use it when you want to check both the journal date window and the equity-session
+context behind the latest market pulse:
 
 ```bash
 mp calendar
@@ -219,11 +297,15 @@ mp find "유가" --last-week
 mp find "반도체" --days 3 --limit 5
 ```
 
-`mp search` is accepted as a thin alias for `mp find`. The first pass is intentionally explicit: it does not parse arbitrary natural-language dates, does not use exchange calendars, does not call live web providers, and does not add semantic/vector search.
+`mp search` is accepted as a thin alias for `mp find`. A small deterministic
+Korean recall alias layer also accepts phrases such as `mp 전에 금리 찾아줘` and
+normalizes them to command-shaped `mp find` arguments. It does not parse
+arbitrary natural-language dates, does not use exchange calendars, does not call
+live web providers, and does not add semantic/vector search.
 
 ### `mp review`
 
-Reviews recent pulses, regimes, inquiries, thoughts, and feedback to surface recurring themes, question habits, and reasoning drills.
+Reviews recent pulses, radars, FOMO checkpoints, regimes, inquiries, thoughts, and feedback to surface recurring themes, question habits, and reasoning drills.
 
 Use `--date YYYY-MM-DD` to review only entries recorded on a specific timestamp date, `--days N` for the common “N days back” flow, or small readable aliases for common calendar windows:
 
@@ -236,16 +318,19 @@ mp review --this-week
 mp review --last-week
 ```
 
-`--limit N` can be combined with one date/window selector; the limit is applied after matching, keeping the most recent matching entries. `--ago N` and `--days-ago N` remain accepted as compatibility aliases, but `--days N` is the preferred relative-day spelling. Use `mp calendar` when you want to inspect what `today`, `yesterday`, `this-week`, and `last-week` mean on the current local machine clock. The date filter is explicit by design. Broader natural-language lookup such as arbitrary `어제` / `지난주` phrasing remains a later search/review phase.
+`--limit N` can be combined with one date/window selector; the limit is applied after matching, keeping the most recent matching entries. `--ago N` and `--days-ago N` remain accepted as compatibility aliases, but `--days N` is the preferred relative-day spelling. Use `mp calendar` when you want to inspect what `today`, `yesterday`, `this-week`, and `last-week` mean on the current local machine clock. The date filter is explicit by design. A small deterministic Korean review alias layer accepts common phrases such as `mp 오늘 복기`, `mp 어제 복기`, `mp 이번주 복기`, and `mp 지난주 리뷰`; broader natural-language review remains out of scope.
 
 
 ## OMX/Codex aliases
 
 When the Codex/OMX skill adapter is installed, you can use readable `$mp-*`
-aliases inside Codex/OMX sessions without changing the standalone shell CLI:
+aliases and canonical `$mp ...` subcommands inside Codex/OMX sessions without
+changing the standalone shell CLI:
 
 ```text
 $mp-now
+$mp watch
+$mp fomo
 $mp-week
 $mp-calendar
 $mp-regime
@@ -262,6 +347,8 @@ $mp-find "금리" --this-week
 These aliases are thin wrappers around the same local `mp` binary:
 
 - `$mp-now` -> `mp now`
+- `$mp watch` -> `mp watch`
+- `$mp fomo` -> `mp fomo`
 - `$mp-week` -> `mp week`
 - `$mp-calendar` -> `mp calendar`
 - `$mp-regime` -> `mp regime`
@@ -271,10 +358,11 @@ These aliases are thin wrappers around the same local `mp` binary:
 - `$mp-review` -> `mp review`, `mp review --date YYYY-MM-DD`, `mp review --days N`, or a small period alias such as `mp review --this-week`
 - `$mp-find` -> `mp find`, optionally with the same small date/window selectors
 
-The canonical `$mp ...` skill remains available for flexible calls. The aliases
-are explicit only: they do not auto-capture arbitrary market/economy sentences,
-and live/source-backed lookup still requires `$mp-research` or an existing
-`mp ... --research` flow.
+The canonical `$mp ...` skill remains available for flexible calls and passes
+Korean/ticker text through to the CLI's deterministic alias router. The named
+`$mp-*` aliases are explicit wrappers, and live/source-backed lookup still
+requires `$mp-research`, an existing `mp ... --research` flow, or an evidence
+marker that the CLI router recognizes.
 
 ## Storage
 
