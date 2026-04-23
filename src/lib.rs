@@ -31,6 +31,28 @@ struct Pulse {
 }
 
 #[derive(Clone, Debug)]
+struct DailyDecisionChecklist {
+    scenario: &'static str,
+    confirm: &'static str,
+    falsify: &'static str,
+    watch: &'static str,
+    discipline: &'static str,
+    journal: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct FomoCheckpoint {
+    timestamp: String,
+    linked_pulse: Option<String>,
+    linked_radar: Option<String>,
+    scenario: Option<String>,
+    confirm: Option<String>,
+    falsify: Option<String>,
+    watch: Option<String>,
+    prompt: String,
+}
+
+#[derive(Clone, Debug)]
 struct Regime {
     timestamp: String,
     basis: Vec<String>,
@@ -183,6 +205,8 @@ struct Feedback {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandKind {
     Now,
+    Watch,
+    Fomo,
     Week,
     Calendar,
     Regime,
@@ -192,6 +216,12 @@ enum CommandKind {
     Help,
     Inquiry { text: String, no_save: bool },
     Research { text: String, no_save: bool },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParsedCommand {
+    kind: CommandKind,
+    args: Vec<String>,
 }
 
 const PULSE_QUOTE_BASIS: &[&str] = &[
@@ -218,6 +248,11 @@ const SYMBOLS: &[(&str, &str, &str)] = &[
     ("BTC-USD", "BTC", "USD"),
 ];
 
+const PULSE_ONLY_SYMBOLS: &[(&str, &str, &str)] = &[("^SOX", "Semis", "")];
+
+const FOMO_JOURNAL_PROMPT: &str =
+    "Run `mp think` with one claim, one confirming signal, and one falsifier.";
+
 pub fn main_entry() {
     if let Err(err) = run(env::args().skip(1).collect()) {
         eprintln!("mp: {err}");
@@ -226,14 +261,17 @@ pub fn main_entry() {
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
-    match parse_command(&args)? {
-        CommandKind::Now => now(&args),
-        CommandKind::Week => week(&args),
-        CommandKind::Calendar => calendar(&args),
-        CommandKind::Regime => regime(&args),
-        CommandKind::Think => think(&args),
-        CommandKind::Review => review(&args),
-        CommandKind::Find => find(&args),
+    let parsed = parse_command_args(&args)?;
+    match parsed.kind {
+        CommandKind::Now => now(&parsed.args),
+        CommandKind::Watch => watch(&parsed.args),
+        CommandKind::Fomo => fomo(&parsed.args),
+        CommandKind::Week => week(&parsed.args),
+        CommandKind::Calendar => calendar(&parsed.args),
+        CommandKind::Regime => regime(&parsed.args),
+        CommandKind::Think => think(&parsed.args),
+        CommandKind::Review => review(&parsed.args),
+        CommandKind::Find => find(&parsed.args),
         CommandKind::Help => {
             print_help();
             Ok(())
@@ -243,22 +281,290 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 fn parse_command(args: &[String]) -> Result<CommandKind, String> {
+    parse_command_args(args).map(|parsed| parsed.kind)
+}
+
+fn parse_command_args(args: &[String]) -> Result<ParsedCommand, String> {
     match args.first().map(String::as_str) {
-        None => Ok(CommandKind::Now),
-        Some("now") => Ok(CommandKind::Now),
-        Some("week") | Some("weekly") => Ok(CommandKind::Week),
-        Some("calendar") | Some("cal") => Ok(CommandKind::Calendar),
-        Some("regime") => Ok(CommandKind::Regime),
-        Some("think") => Ok(CommandKind::Think),
-        Some("review") => Ok(CommandKind::Review),
-        Some("find") | Some("search") => Ok(CommandKind::Find),
-        Some("help") | Some("--help") | Some("-h") => Ok(CommandKind::Help),
-        Some("ask") => inquiry_command(&args[1..], "`mp ask` needs a question"),
-        Some("research") => research_command(&args[1..], "`mp research` needs a question"),
+        None => Ok(parsed(CommandKind::Now, args)),
+        Some("now") => Ok(parsed(CommandKind::Now, args)),
+        Some("watch") => Ok(parsed(CommandKind::Watch, args)),
+        Some("fomo") => Ok(parsed(CommandKind::Fomo, args)),
+        Some("week") | Some("weekly") => Ok(parsed(CommandKind::Week, args)),
+        Some("calendar") | Some("cal") => Ok(parsed(CommandKind::Calendar, args)),
+        Some("regime") => Ok(parsed(CommandKind::Regime, args)),
+        Some("think") => Ok(parsed(CommandKind::Think, args)),
+        Some("review") => Ok(parsed(CommandKind::Review, args)),
+        Some("find") | Some("search") => Ok(parsed(CommandKind::Find, args)),
+        Some("help") | Some("--help") | Some("-h") => Ok(parsed(CommandKind::Help, args)),
+        Some("ask") => Ok(parsed(
+            inquiry_command(&args[1..], "`mp ask` needs a question")?,
+            args,
+        )),
+        Some("research") => Ok(parsed(
+            research_command(&args[1..], "`mp research` needs a question")?,
+            args,
+        )),
+        Some("--research") => Ok(parsed(
+            research_command(args, "`mp --research` needs a question")?,
+            args,
+        )),
         Some(first) if first.starts_with('-') => Err(format!("unknown option '{first}'")),
-        Some(_) => inquiry_command(args, "`mp` needs a market question"),
+        Some(_) if args.iter().any(|arg| arg == "--research") => Ok(parsed(
+            inquiry_command(args, "`mp` needs a market question")?,
+            args,
+        )),
+        Some(_) => natural_command(args).unwrap_or_else(|| {
+            inquiry_command(args, "`mp` needs a market question").map(|kind| parsed(kind, args))
+        }),
     }
+}
+
+fn parsed(kind: CommandKind, args: &[String]) -> ParsedCommand {
+    ParsedCommand {
+        kind,
+        args: args.to_vec(),
+    }
+}
+
+fn parsed_with_args(kind: CommandKind, args: Vec<String>) -> ParsedCommand {
+    ParsedCommand { kind, args }
+}
+
+fn natural_command(args: &[String]) -> Option<Result<ParsedCommand, String>> {
+    if let Some(parsed) = natural_review_command(args) {
+        return Some(Ok(parsed));
+    }
+    if let Some(parsed) = natural_find_command(args) {
+        return Some(Ok(parsed));
+    }
+    if let Some(parsed) = natural_think_command(args) {
+        return Some(Ok(parsed));
+    }
+    if has_research_intent(args) {
+        return Some(
+            research_command(args, "`mp` needs a market question").map(|kind| parsed(kind, args)),
+        );
+    }
+    if is_natural_now(args) {
+        return Some(Ok(parsed(CommandKind::Now, args)));
+    }
+    if is_natural_week(args) {
+        return Some(Ok(parsed(CommandKind::Week, args)));
+    }
+    if is_natural_regime(args) {
+        return Some(Ok(parsed(CommandKind::Regime, args)));
+    }
+    if is_natural_calendar(args) {
+        return Some(Ok(parsed(CommandKind::Calendar, args)));
+    }
+    None
+}
+
+fn natural_review_command(args: &[String]) -> Option<ParsedCommand> {
+    let (tokens, passthrough) = natural_tokens_and_flags(args, FlagPolicy::ReviewOrFind);
+    if !tokens
+        .iter()
+        .any(|token| token.contains("복기") || token.contains("리뷰"))
+    {
+        return None;
+    }
+
+    let alias = review_alias_from_tokens(&tokens)?;
+    let mut normalized = vec!["review".to_string(), alias.to_string()];
+    normalized.extend(passthrough);
+    Some(parsed_with_args(CommandKind::Review, normalized))
+}
+
+fn natural_find_command(args: &[String]) -> Option<ParsedCommand> {
+    let (tokens, passthrough) = natural_tokens_and_flags(args, FlagPolicy::ReviewOrFind);
+    if !tokens.iter().any(|token| {
+        token.contains("찾")
+            || token.contains("검색")
+            || matches!(token.as_str(), "전에" | "지난번" | "기억")
+    }) {
+        return None;
+    }
+
+    let query = tokens
+        .into_iter()
+        .filter(|token| !is_find_route_word(token))
+        .collect::<Vec<_>>();
+    if query.is_empty() {
+        return None;
+    }
+
+    let mut normalized = vec!["find".to_string()];
+    normalized.extend(query);
+    normalized.extend(passthrough);
+    Some(parsed_with_args(CommandKind::Find, normalized))
+}
+
+fn natural_think_command(args: &[String]) -> Option<ParsedCommand> {
+    let (tokens, passthrough) = natural_tokens_and_flags(args, FlagPolicy::Think);
+    if !tokens.iter().any(|token| {
+        matches!(token.as_str(), "생각" | "메모" | "기록" | "판단") || token.starts_with("생각:")
+    }) {
+        return None;
+    }
+
+    let thought = tokens
+        .into_iter()
+        .flat_map(|token| think_text_parts(&token))
+        .collect::<Vec<_>>();
+    if thought.is_empty() {
+        return None;
+    }
+
+    let mut normalized = vec!["think".to_string()];
+    normalized.extend(thought);
+    normalized.extend(passthrough);
+    Some(parsed_with_args(CommandKind::Think, normalized))
+}
+
+fn review_alias_from_tokens(tokens: &[String]) -> Option<&'static str> {
+    if tokens.iter().any(|token| token.contains("지난주")) {
+        return Some("--last-week");
+    }
+    if tokens
+        .iter()
+        .any(|token| token.contains("이번주") || token.contains("주간"))
+    {
+        return Some("--this-week");
+    }
+    if tokens.iter().any(|token| token.contains("어제")) {
+        return Some("--yesterday");
+    }
+    if tokens.iter().any(|token| token.contains("오늘")) {
+        return Some("--today");
+    }
+    None
+}
+
+fn is_find_route_word(token: &str) -> bool {
+    token.contains("찾")
+        || token.contains("검색")
+        || matches!(token, "전에" | "지난번" | "기억" | "내용")
+}
+
+fn think_text_parts(token: &str) -> Vec<String> {
+    match token {
+        "내" | "생각" | "메모" | "기록" | "판단" => Vec::new(),
+        token if token.starts_with("생각:") => {
+            let rest = token.trim_start_matches("생각:").trim();
+            if rest.is_empty() {
+                Vec::new()
+            } else {
+                vec![rest.to_string()]
+            }
+        }
+        _ => vec![token.to_string()],
+    }
+}
+
+fn has_research_intent(args: &[String]) -> bool {
+    let (tokens, _) = natural_tokens_and_flags(args, FlagPolicy::TextOnly);
+    tokens.iter().any(|token| {
+        token.contains("리서치")
+            || token.contains("근거")
+            || token.contains("출처")
+            || token.contains("왜")
+            || token.contains("확인")
+            || token.contains("뉴스")
+            || token.contains("자료")
+            || token.contains("팩트체크")
+    })
+}
+
+fn is_natural_now(args: &[String]) -> bool {
+    let (tokens, _) = natural_tokens_and_flags(args, FlagPolicy::TextOnly);
+    let snapshot_like = tokens.iter().any(|token| {
+        token.contains("시황")
+            || token.contains("시장")
+            || token.contains("마켓")
+            || token.contains("펄스")
+    });
+    tokens.len() <= 4 && snapshot_like
+}
+
+fn is_natural_week(args: &[String]) -> bool {
+    let (tokens, _) = natural_tokens_and_flags(args, FlagPolicy::TextOnly);
+    tokens
+        .iter()
+        .any(|token| token.contains("이번주") || token.contains("주간") || token.contains("한주"))
+}
+
+fn is_natural_regime(args: &[String]) -> bool {
+    let (tokens, _) = natural_tokens_and_flags(args, FlagPolicy::TextOnly);
+    tokens.iter().any(|token| {
+        token.contains("레짐")
+            || token.contains("국면")
+            || token.contains("1-3개월")
+            || token.contains("중기")
+    }) || (tokens.iter().any(|token| token.contains("흐름"))
+        && tokens
+            .iter()
+            .any(|token| token.contains("큰") || token.contains("중기")))
+}
+
+fn is_natural_calendar(args: &[String]) -> bool {
+    let (tokens, _) = natural_tokens_and_flags(args, FlagPolicy::TextOnly);
+    tokens.iter().any(|token| token.contains("캘린더"))
+}
+
+#[derive(Clone, Copy)]
+enum FlagPolicy {
+    TextOnly,
+    ReviewOrFind,
+    Think,
+}
+
+fn natural_tokens_and_flags(args: &[String], policy: FlagPolicy) -> (Vec<String>, Vec<String>) {
+    let mut tokens = Vec::new();
+    let mut passthrough = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if matches!(
+            arg.as_str(),
+            "--limit" | "--date" | "--days" | "--ago" | "--days-ago"
+        ) {
+            if matches!(policy, FlagPolicy::ReviewOrFind) {
+                passthrough.push(arg.clone());
+                if let Some(value) = args.get(i + 1) {
+                    passthrough.push(value.clone());
+                }
+            }
+            i += 2;
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "--today" | "--yesterday" | "--this-week" | "--last-week"
+        ) {
+            if matches!(policy, FlagPolicy::ReviewOrFind) {
+                passthrough.push(arg.clone());
+            }
+            i += 1;
+            continue;
+        }
+        if arg == "--no-save" {
+            if matches!(policy, FlagPolicy::Think) {
+                passthrough.push(arg.clone());
+            }
+            i += 1;
+            continue;
+        }
+        if arg.starts_with("--") {
+            i += 1;
+            continue;
+        }
+        tokens.push(arg.clone());
+        i += 1;
+    }
+    (tokens, passthrough)
 }
 
 fn inquiry_command(args: &[String], empty_error: &str) -> Result<CommandKind, String> {
@@ -296,7 +602,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 
 fn print_help() {
     println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]"
+        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp watch [--no-save]\n  mp fomo [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n\nNatural aliases:\n  mp 오늘 시황\n  mp NVDA\n  mp NVDA 리서치\n  mp 전에 금리 찾아줘 --limit 3\n  mp 이번주 복기"
     );
 }
 
@@ -308,6 +614,27 @@ fn now(args: &[String]) -> Result<(), String> {
         append_event(&pulse_json(&pulse))?;
     }
     println!("{}", render_pulse(&pulse, compact));
+    Ok(())
+}
+
+fn watch(args: &[String]) -> Result<(), String> {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let pulse = build_pulse();
+    let checklist = daily_decision_checklist(&pulse);
+    if !no_save {
+        append_event(&radar_json(&pulse, &checklist))?;
+    }
+    println!("{}", render_radar(&pulse, &checklist));
+    Ok(())
+}
+
+fn fomo(args: &[String]) -> Result<(), String> {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let checkpoint = build_fomo_checkpoint();
+    if !no_save {
+        append_event(&fomo_check_json(&checkpoint))?;
+    }
+    println!("{}", render_fomo_checkpoint(&checkpoint));
     Ok(())
 }
 
@@ -821,7 +1148,7 @@ fn validate_review_date(date: &str) -> Result<(), String> {
 fn build_pulse() -> Pulse {
     let mut assets = Vec::new();
     let mut failures = 0;
-    for (symbol, label, unit) in SYMBOLS {
+    for &(symbol, label, unit) in SYMBOLS.iter().chain(PULSE_ONLY_SYMBOLS.iter()) {
         match fetch_asset(symbol, label, unit) {
             Ok(asset) => assets.push(asset),
             Err(_) => {
@@ -2106,12 +2433,217 @@ fn render_pulse(p: &Pulse, compact: bool) -> String {
     for seed in seeds {
         out.push_str(&format!("  - {seed}\n"));
     }
+    let checklist = daily_decision_checklist(p);
+    out.push_str(&render_daily_decision_checklist(&checklist));
     if !p.notes.is_empty() {
         out.push_str("\nSource notes\n");
         for n in &p.notes {
             out.push_str(&format!("  - {n}\n"));
         }
     }
+    out
+}
+
+fn daily_decision_checklist(p: &Pulse) -> DailyDecisionChecklist {
+    let nasdaq = change_for(&p.assets, "^IXIC");
+    let spx = change_for(&p.assets, "^GSPC");
+    let semis = change_for(&p.assets, "^SOX");
+    let kospi = change_for(&p.assets, "^KS11");
+    let usd_krw = change_for(&p.assets, "KRW=X");
+    let dxy = change_for(&p.assets, "DX-Y.NYB");
+    let rates = change_for(&p.assets, "^TNX");
+    let oil = change_for(&p.assets, "CL=F");
+    let btc = change_for(&p.assets, "BTC-USD");
+
+    let semis_available = semis.is_some();
+    let semis_positive = semis.is_some_and(|v| v > 0.75);
+    let semis_leading = semis.is_some_and(|v| v > 1.25)
+        && nasdaq.is_some_and(|v| v > 0.5)
+        && semis.unwrap_or(0.0) - spx.unwrap_or(0.0) >= 0.5;
+    let semis_weak = semis.is_some_and(|v| v < -0.5)
+        || (nasdaq.is_some_and(|v| v > 0.5) && semis.is_some_and(|v| v < 0.0));
+    let equity_positive = [nasdaq, spx, kospi]
+        .iter()
+        .flatten()
+        .any(|change| *change > 0.5);
+    let high_beta_positive = btc.is_some_and(|v| v > 1.0) || nasdaq.is_some_and(|v| v > 0.5);
+    let fx_pressure = dxy.is_some_and(|v| v > 0.25) || usd_krw.is_some_and(|v| v > 0.25);
+    let macro_pressure =
+        fx_pressure || rates.is_some_and(|v| v > 0.5) || oil.is_some_and(|v| v > 1.0);
+    let korea_strong = kospi.is_some_and(|v| v > 0.6);
+
+    let scenario = if semis_leading && macro_pressure {
+        "Semis-led growth risk-on; macro confirmation incomplete"
+    } else if semis_leading {
+        "Semis-led growth risk-on; watch BTC/KOSPI confirmation"
+    } else if semis_available && semis_weak {
+        "Growth leadership fading; watch whether semis or BTC breaks first"
+    } else if korea_strong && fx_pressure && semis_positive {
+        "Korea/EM beta confirmation needed despite semis strength"
+    } else if korea_strong && fx_pressure {
+        "Korea/EM beta confirmation needed"
+    } else if semis_available && nasdaq.is_some_and(|v| v > 0.5) && !semis_positive {
+        "Nasdaq risk-on with semis confirmation still pending"
+    } else if high_beta_positive && macro_pressure {
+        "High-beta risk-on attempt; macro confirmation incomplete"
+    } else if high_beta_positive || equity_positive {
+        "Broad risk-on attempt; watch dollar/rates confirmation"
+    } else if macro_pressure && nasdaq.is_some_and(|v| v > 0.0) {
+        "Macro pressure fighting growth leadership"
+    } else {
+        "Mixed tape; wait for confirmation rather than forcing a one-cause story"
+    };
+
+    let confirm = if semis_leading && macro_pressure {
+        "Semis and Nasdaq keep leading while BTC/KOSPI confirm and dollar/rates pressure stops rising."
+    } else if semis_leading {
+        "Semis and Nasdaq keep leading while BTC and KOSPI confirm the same risk tone."
+    } else if semis_available && semis_weak {
+        "Semis stabilize before Nasdaq, BTC, and KOSPI lose the same growth story."
+    } else if semis_available && nasdaq.is_some_and(|v| v > 0.5) && !semis_positive {
+        "Semis stop lagging while Nasdaq, BTC, and KOSPI keep confirming together."
+    } else if korea_strong && fx_pressure {
+        "KOSPI strength holds while USD/KRW and DXY stop adding pressure."
+    } else if high_beta_positive && macro_pressure {
+        "Equities and BTC keep confirming while dollar/rates pressure stops rising."
+    } else if high_beta_positive || equity_positive {
+        "Nasdaq, S&P 500, KOSPI, and BTC keep pointing in the same direction."
+    } else {
+        "At least two assets confirm the same story in the next check."
+    };
+
+    let falsify = if semis_available {
+        "Semis lose leadership first, or Nasdaq weakness pulls BTC/KOSPI lower while dollar or rates pressure rises."
+    } else if macro_pressure {
+        "Nasdaq weakness pulls BTC/KOSPI lower while dollar or rates pressure rises."
+    } else {
+        "The strongest index fades first and cross-asset confirmation disappears."
+    };
+
+    DailyDecisionChecklist {
+        scenario,
+        confirm,
+        falsify,
+        watch: if semis_available {
+            "Semis vs Nasdaq, BTC, KOSPI, DXY, USD/KRW, and US 10Y."
+        } else {
+            "Nasdaq vs S&P 500, BTC, DXY, USD/KRW, US 10Y, and KOSPI."
+        },
+        discipline: if semis_available {
+            "Treat laggards as unproven unless they hold during Nasdaq/semis weakness."
+        } else {
+            "Treat laggards as unproven unless they hold when Nasdaq weakens."
+        },
+        journal: if semis_available {
+            "Run `mp think` with one leadership claim, one confirming signal, and one falsifier."
+        } else {
+            "Run `mp think` with one claim, one confirming signal, and one falsifier."
+        },
+    }
+}
+
+fn render_daily_decision_checklist(checklist: &DailyDecisionChecklist) -> String {
+    format!(
+        "\nDaily Decision Checklist\n  Scenario: {}\n  Confirm: {}\n  Falsify: {}\n  Watch: {}\n  Discipline: {}\n  Journal: {}\n",
+        checklist.scenario,
+        checklist.confirm,
+        checklist.falsify,
+        checklist.watch,
+        checklist.discipline,
+        checklist.journal
+    )
+}
+
+fn render_radar(p: &Pulse, checklist: &DailyDecisionChecklist) -> String {
+    let mut out = format!(
+        "Market Radar · {} · {}\n\nMood\n  {}\n\nBasis\n",
+        p.timestamp, p.session, p.mood
+    );
+    for b in &p.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str(&format!(
+        "\nRadar\n  Scenario: {}\n  Watch: {}\n  Confirm: {}\n  Falsify: {}\n",
+        checklist.scenario, checklist.watch, checklist.confirm, checklist.falsify
+    ));
+    if !p.drivers.is_empty() {
+        out.push_str("\nDrivers to explain, not chase\n");
+        for (i, d) in p.drivers.iter().take(3).enumerate() {
+            out.push_str(&format!("  {}. {d}\n", i + 1));
+        }
+    }
+    if !p.tensions.is_empty() {
+        out.push_str("\nTension\n");
+        for tension in p.tensions.iter().take(2) {
+            out.push_str(&format!("  - {tension}\n"));
+        }
+    }
+    out.push_str(
+        "\nFOMO checkpoint\n  - Am I reacting to evidence, or opportunity-cost fear?\n  - What single observation would make this story wrong today?\n  - What would I write in `mp think` if I had to defend the claim later?\n\nBoundary\n  Reasoning support only; no trading instructions.\n",
+    );
+    if !p.notes.is_empty() {
+        out.push_str("\nSource notes\n");
+        for n in &p.notes {
+            out.push_str(&format!("  - {n}\n"));
+        }
+    }
+    out
+}
+
+fn build_fomo_checkpoint() -> FomoCheckpoint {
+    let radar = latest_radar_event();
+    FomoCheckpoint {
+        timestamp: timestamp(),
+        linked_pulse: radar
+            .as_ref()
+            .and_then(|line| json_field(line, "linked_pulse_timestamp"))
+            .or_else(latest_pulse_timestamp),
+        linked_radar: radar
+            .as_ref()
+            .and_then(|line| json_field(line, "timestamp"))
+            .or_else(latest_radar_timestamp),
+        scenario: radar.as_ref().and_then(|line| json_field(line, "scenario")),
+        confirm: radar.as_ref().and_then(|line| json_field(line, "confirm")),
+        falsify: radar.as_ref().and_then(|line| json_field(line, "falsify")),
+        watch: radar.as_ref().and_then(|line| json_field(line, "watch")),
+        prompt: FOMO_JOURNAL_PROMPT.into(),
+    }
+}
+
+fn render_fomo_checkpoint(checkpoint: &FomoCheckpoint) -> String {
+    let latest_radar = checkpoint
+        .linked_radar
+        .as_deref()
+        .unwrap_or("not recorded yet");
+    let latest_pulse = checkpoint
+        .linked_pulse
+        .as_deref()
+        .unwrap_or("not recorded yet");
+    let scenario = checkpoint
+        .scenario
+        .as_deref()
+        .unwrap_or("no radar scenario yet; run `mp watch` for a fresh context card");
+
+    let mut out = format!(
+        "FOMO Checkpoint · {}\n\nContext\n  Latest radar: {}\n  Latest pulse: {}\n  Scenario: {}\n\nPause\n  1. What exactly am I reacting to?\n  2. Which evidence confirms the scenario?\n  3. Which observation would falsify it today?\n  4. Is this evidence, or opportunity-cost fear?\n",
+        checkpoint.timestamp, latest_radar, latest_pulse, scenario
+    );
+    if checkpoint.confirm.is_some() || checkpoint.falsify.is_some() || checkpoint.watch.is_some() {
+        out.push_str("\nCarry-over checks\n");
+        if let Some(watch) = checkpoint.watch.as_deref() {
+            out.push_str(&format!("  Watch: {watch}\n"));
+        }
+        if let Some(confirm) = checkpoint.confirm.as_deref() {
+            out.push_str(&format!("  Confirm: {confirm}\n"));
+        }
+        if let Some(falsify) = checkpoint.falsify.as_deref() {
+            out.push_str(&format!("  Falsify: {falsify}\n"));
+        }
+    }
+    out.push_str(&format!(
+        "\nNext journal prompt\n  {}\n\nBoundary\n  Reasoning support only; no trading instructions.\n",
+        checkpoint.prompt
+    ));
     out
 }
 
@@ -2427,11 +2959,45 @@ fn render_feedback(f: &Feedback) -> String {
     out
 }
 
+struct ExchangeSessionRow {
+    label: &'static str,
+    regular_hours: &'static str,
+    status: &'static str,
+    note: &'static str,
+}
+
+fn static_equity_session_status(weekday: Option<u32>) -> &'static str {
+    match weekday {
+        Some(1..=5) => "weekday under static MVP rules; holidays/early closes not modeled",
+        Some(6 | 7) => "weekend under static MVP rules; regular equity session closed",
+        _ => "status unavailable under static MVP rules",
+    }
+}
+
+fn exchange_session_rows(weekday: Option<u32>) -> [ExchangeSessionRow; 2] {
+    let status = static_equity_session_status(weekday);
+    [
+        ExchangeSessionRow {
+            label: "US equities (NYSE/Nasdaq, ET)",
+            regular_hours: "09:30-16:00 ET",
+            status,
+            note: "Korea-local date can differ from the US session date; use this as session context, not official open-now proof.",
+        },
+        ExchangeSessionRow {
+            label: "Korea equities (KRX/KOSPI, KST)",
+            regular_hours: "09:00-15:30 KST",
+            status,
+            note: "Holidays and early closes are not modeled in this first pass.",
+        },
+    ]
+}
+
 fn render_calendar() -> String {
     let today = date_for_days_ago(0).unwrap_or_else(|_| "unavailable".into());
     let yesterday = date_for_days_ago(1).unwrap_or_else(|_| "unavailable".into());
     let this_week = current_week_date_prefixes();
     let last_week = last_week_date_prefixes();
+    let weekday = iso_weekday();
     let mut out = format!(
         "Market Pulse Calendar · {}\n\nLocal date windows\n",
         timestamp()
@@ -2446,6 +3012,17 @@ fn render_calendar() -> String {
         "  - last-week: {}\n",
         week_window_label(&last_week)
     ));
+    out.push_str("\nExchange sessions (static MVP)\n");
+    for row in exchange_session_rows(weekday) {
+        out.push_str(&format!(
+            "  - {}: regular {}; {}\n",
+            row.label, row.regular_hours, row.status
+        ));
+        out.push_str(&format!("    note: {}\n", row.note));
+    }
+    out.push_str(
+        "\nCalendar ↔ pulse bridge\n  - mp now: close-to-close daily pulse; read it against latest available exchange closes, not only the local date.\n  - mp week: local journal week plus first matching Yahoo daily close in the current local week.\n  - US/Korea session dates can differ from the Korea local timestamp; this card gives interpretation context, not official exchange proof.\n",
+    );
     out.push_str(
         "\nReview shortcuts\n  - mp review --today\n  - mp review --yesterday\n  - mp review --this-week\n  - mp review --last-week\n",
     );
@@ -2453,7 +3030,7 @@ fn render_calendar() -> String {
         "\nHow market-pulse uses these windows\n  - mp week uses the current local calendar week for journal review.\n  - mp week prices the market window from the first Yahoo close matching the current local week when available.\n  - mp review period aliases filter journal timestamp dates; they are not fuzzy full-text search.\n",
     );
     out.push_str(
-        "\nBoundary\n  Calendar windows are local-date helpers for market literacy, not exchange-holiday calendars or trading signals.\n",
+        "\nBoundary\n  Static exchange-session MVP for market literacy; not a full official holiday/early-close calendar, live event calendar, or trading signal.\n",
     );
     out
 }
@@ -2564,11 +3141,27 @@ fn event_matches_date(line: &str, date: &str) -> bool {
 }
 
 fn latest_pulse_timestamp() -> Option<String> {
+    latest_event_timestamp("pulse")
+}
+
+fn latest_radar_timestamp() -> Option<String> {
+    latest_event_timestamp("radar")
+}
+
+fn latest_event_timestamp(event_type: &str) -> Option<String> {
+    latest_event(event_type).and_then(|l| json_field(&l, "timestamp"))
+}
+
+fn latest_radar_event() -> Option<String> {
+    latest_event("radar")
+}
+
+fn latest_event(event_type: &str) -> Option<String> {
+    let needle = format!("\"type\":\"{event_type}\"");
     read_events(usize::MAX)
         .into_iter()
         .rev()
-        .find(|l| l.contains("\"type\":\"pulse\""))
-        .and_then(|l| json_field(&l, "timestamp"))
+        .find(|l| l.contains(&needle))
 }
 
 fn json_field(line: &str, key: &str) -> Option<String> {
@@ -2704,9 +3297,11 @@ fn render_find_from_events(
 
     let summary = summarize_events(events);
     let mut out = format!(
-        "Market Pulse Find\n\nQuery: \"{query}\"\nFilter: {filter}\nJournal: {journal}\nEntries matched: {} · pulses {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nMatches\n",
+        "Market Pulse Find\n\nQuery: \"{query}\"\nFilter: {filter}\nJournal: {journal}\nEntries matched: {} · pulses {} · radars {} · fomo {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nMatches\n",
         events.len(),
         summary.pulses,
+        summary.radars,
+        summary.fomo_checks,
         summary.weeks,
         summary.regimes,
         summary.inquiries,
@@ -2748,6 +3343,10 @@ fn event_recall_snippet(line: &str, query: &str) -> String {
     let event_type = json_field(line, "type").unwrap_or_else(|| "entry".into());
     let body = json_field(line, "text")
         .or_else(|| json_field(line, "question"))
+        .or_else(|| json_field(line, "scenario"))
+        .or_else(|| json_field(line, "prompt"))
+        .or_else(|| json_field(line, "confirm"))
+        .or_else(|| json_field(line, "falsify"))
         .or_else(|| json_field(line, "mood"))
         .or_else(|| json_field(line, "concept"))
         .or_else(|| json_field(line, "source_titles"))
@@ -2775,6 +3374,8 @@ fn compact_snippet(text: &str, _query: &str) -> String {
 #[derive(Clone, Debug)]
 struct JournalSummary {
     pulses: usize,
+    radars: usize,
+    fomo_checks: usize,
     weeks: usize,
     regimes: usize,
     inquiries: usize,
@@ -2788,6 +3389,8 @@ struct JournalSummary {
 
 fn summarize_events(events: &[String]) -> JournalSummary {
     let pulses = count_events(events, "pulse");
+    let radars = count_events(events, "radar");
+    let fomo_checks = count_events(events, "fomo_check");
     let weeks = count_events(events, "week");
     let regimes = count_events(events, "regime");
     let inquiries = count_events(events, "inquiry");
@@ -2810,9 +3413,13 @@ fn summarize_events(events: &[String]) -> JournalSummary {
         l.contains("\"type\":\"thought\"")
             || l.contains("\"type\":\"inquiry\"")
             || l.contains("\"type\":\"research_inquiry\"")
+            || l.contains("\"type\":\"radar\"")
+            || l.contains("\"type\":\"fomo_check\"")
     }) {
         let text = json_field(line, "text")
             .or_else(|| json_field(line, "question"))
+            .or_else(|| json_field(line, "scenario"))
+            .or_else(|| json_field(line, "prompt"))
             .unwrap_or_default();
         if contains_hangul(&text) {
             korean_entries += 1;
@@ -2832,6 +3439,8 @@ fn summarize_events(events: &[String]) -> JournalSummary {
     thesis_types.dedup();
     JournalSummary {
         pulses,
+        radars,
+        fomo_checks,
         weeks,
         regimes,
         inquiries,
@@ -2854,7 +3463,7 @@ fn render_review_from_events(events: &[String], journal: &str) -> String {
         return "No market-pulse journal entries yet. Start with `mp \"your market question\"`, then `mp think \"...\"`.".into();
     }
     let summary = summarize_events(events);
-    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), summary.pulses, summary.weeks, summary.regimes, summary.inquiries, summary.research_inquiries, summary.thoughts, summary.feedback);
+    let mut out = format!("Market Pulse Review\n\nJournal: {journal}\nEntries scanned: {} · pulses {} · radars {} · fomo {} · weeks {} · regimes {} · inquiries {} · research {} · thoughts {} · feedback {}\n\nRepeated themes\n", events.len(), summary.pulses, summary.radars, summary.fomo_checks, summary.weeks, summary.regimes, summary.inquiries, summary.research_inquiries, summary.thoughts, summary.feedback);
     let mut wrote = false;
     for (tag, count) in summary.tag_counts.iter().filter(|(_, c)| *c > 0).take(6) {
         wrote = true;
@@ -2884,6 +3493,32 @@ fn pulse_json(p: &Pulse) -> String {
         esc(&p.mood),
         esc(&p.question),
         esc(&p.concept)
+    )
+}
+
+fn radar_json(p: &Pulse, checklist: &DailyDecisionChecklist) -> String {
+    format!(
+        "{{\"type\":\"radar\",\"timestamp\":\"{}\",\"session\":\"{}\",\"linked_pulse_timestamp\":\"{}\",\"mood\":\"{}\",\"scenario\":\"{}\",\"confirm\":\"{}\",\"falsify\":\"{}\",\"watch\":\"{}\",\"prompt\":\"{}\"}}",
+        esc(&p.timestamp),
+        esc(&p.session),
+        esc(&p.timestamp),
+        esc(&p.mood),
+        esc(checklist.scenario),
+        esc(checklist.confirm),
+        esc(checklist.falsify),
+        esc(checklist.watch),
+        esc(FOMO_JOURNAL_PROMPT)
+    )
+}
+
+fn fomo_check_json(checkpoint: &FomoCheckpoint) -> String {
+    format!(
+        "{{\"type\":\"fomo_check\",\"timestamp\":\"{}\",\"linked_pulse_timestamp\":{},\"linked_radar_timestamp\":{},\"scenario\":\"{}\",\"prompt\":\"{}\"}}",
+        esc(&checkpoint.timestamp),
+        opt_json(checkpoint.linked_pulse.as_deref()),
+        opt_json(checkpoint.linked_radar.as_deref()),
+        esc(checkpoint.scenario.as_deref().unwrap_or("")),
+        esc(&checkpoint.prompt)
     )
 }
 
@@ -2997,6 +3632,10 @@ fn session() -> String {
 mod tests {
     use super::*;
 
+    fn args(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| (*part).to_string()).collect()
+    }
+
     #[test]
     fn routes_bare_question_and_ask_to_inquiry() {
         let bare = vec!["금리가".into(), "내려간".into(), "이유?".into()];
@@ -3031,6 +3670,18 @@ mod tests {
         assert_eq!(
             parse_command(&["regime".into(), "--no-save".into()]).unwrap(),
             CommandKind::Regime
+        );
+    }
+
+    #[test]
+    fn routes_watch_and_fomo_commands() {
+        assert_eq!(
+            parse_command(&["watch".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Watch
+        );
+        assert_eq!(
+            parse_command(&["fomo".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Fomo
         );
     }
 
@@ -3102,6 +3753,277 @@ mod tests {
             }
         );
         assert!(parse_command(&["research".into()]).is_err());
+    }
+
+    #[test]
+    fn routes_korean_market_pulse_aliases_to_now() {
+        assert_eq!(
+            parse_command(&args(&["오늘", "시황"])).unwrap(),
+            CommandKind::Now
+        );
+        assert_eq!(
+            parse_command(&args(&["지금", "시장"])).unwrap(),
+            CommandKind::Now
+        );
+        assert_eq!(
+            parse_command(&args(&["시장", "펄스"])).unwrap(),
+            CommandKind::Now
+        );
+    }
+
+    #[test]
+    fn routes_korean_period_and_regime_aliases() {
+        assert_eq!(
+            parse_command(&args(&["이번주"])).unwrap(),
+            CommandKind::Week
+        );
+        assert_eq!(
+            parse_command(&args(&["주간", "체크"])).unwrap(),
+            CommandKind::Week
+        );
+        assert_eq!(
+            parse_command(&args(&["레짐"])).unwrap(),
+            CommandKind::Regime
+        );
+        assert_eq!(
+            parse_command(&args(&["국면", "체크"])).unwrap(),
+            CommandKind::Regime
+        );
+        assert_eq!(
+            parse_command(&args(&["캘린더"])).unwrap(),
+            CommandKind::Calendar
+        );
+    }
+
+    #[test]
+    fn routes_korean_review_aliases_with_date_windows() {
+        assert_eq!(
+            parse_command_args(&args(&["오늘", "복기"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Review,
+                args: args(&["review", "--today"]),
+            }
+        );
+        assert_eq!(
+            parse_command_args(&args(&["어제", "복기"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Review,
+                args: args(&["review", "--yesterday"]),
+            }
+        );
+        assert_eq!(
+            parse_command_args(&args(&["이번주", "복기"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Review,
+                args: args(&["review", "--this-week"]),
+            }
+        );
+        assert_eq!(
+            parse_command_args(&args(&["지난주", "리뷰", "--limit", "3"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Review,
+                args: args(&["review", "--last-week", "--limit", "3"]),
+            }
+        );
+    }
+
+    #[test]
+    fn routes_korean_recall_aliases_to_find() {
+        assert_eq!(
+            parse_command_args(&args(&["전에", "금리", "찾아줘"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Find,
+                args: args(&["find", "금리"]),
+            }
+        );
+        assert_eq!(
+            parse_command_args(&args(&["지난번", "반도체", "검색", "--limit", "3"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Find,
+                args: args(&["find", "반도체", "--limit", "3"]),
+            }
+        );
+    }
+
+    #[test]
+    fn routes_korean_thought_aliases_to_think() {
+        assert_eq!(
+            parse_command_args(&args(&["내", "생각", "나스닥은", "너무", "오른듯"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Think,
+                args: args(&["think", "나스닥은", "너무", "오른듯"]),
+            }
+        );
+        assert_eq!(
+            parse_command_args(&args(&["메모", "달러가", "약한데", "코스피가", "강함"])).unwrap(),
+            ParsedCommand {
+                kind: CommandKind::Think,
+                args: args(&["think", "달러가", "약한데", "코스피가", "강함"]),
+            }
+        );
+    }
+
+    #[test]
+    fn routes_korean_research_intent_to_research() {
+        assert_eq!(
+            parse_command(&args(&["NVDA", "리서치"])).unwrap(),
+            CommandKind::Research {
+                text: "NVDA 리서치".into(),
+                no_save: false,
+            }
+        );
+        assert_eq!(
+            parse_command(&args(&["반도체", "왜", "오름?"])).unwrap(),
+            CommandKind::Research {
+                text: "반도체 왜 오름?".into(),
+                no_save: false,
+            }
+        );
+        assert_eq!(
+            parse_command(&args(&["삼성전자", "근거", "확인", "--no-save"])).unwrap(),
+            CommandKind::Research {
+                text: "삼성전자 근거 확인".into(),
+                no_save: true,
+            }
+        );
+    }
+
+    #[test]
+    fn routes_leading_research_flag_without_opening_unknown_options() {
+        assert_eq!(
+            parse_command(&args(&["--research", "NVDA"])).unwrap(),
+            CommandKind::Research {
+                text: "NVDA".into(),
+                no_save: false,
+            }
+        );
+        assert_eq!(
+            parse_command(&args(&["--research", "삼성전자", "--no-save"])).unwrap(),
+            CommandKind::Research {
+                text: "삼성전자".into(),
+                no_save: true,
+            }
+        );
+        assert!(parse_command(&args(&["--bad", "NVDA"]))
+            .unwrap_err()
+            .contains("unknown option '--bad'"));
+    }
+
+    #[test]
+    fn routes_ticker_company_asset_only_to_safe_inquiry() {
+        for asset in ["NVDA", "BTC", "비트코인", "삼성전자", "반도체"] {
+            assert_eq!(
+                parse_command(&args(&[asset])).unwrap(),
+                CommandKind::Inquiry {
+                    text: asset.into(),
+                    no_save: false,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn natural_router_preserves_precedence() {
+        assert!(matches!(
+            parse_command(&args(&["research", "오늘", "시황"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+        assert_eq!(
+            parse_command(&args(&["ask", "NVDA", "리서치?"])).unwrap(),
+            CommandKind::Inquiry {
+                text: "NVDA 리서치?".into(),
+                no_save: false,
+            }
+        );
+        assert_eq!(
+            parse_command(&args(&["now", "리서치"])).unwrap(),
+            CommandKind::Now
+        );
+        assert_eq!(
+            parse_command(&args(&["오늘", "시황"])).unwrap(),
+            CommandKind::Now
+        );
+        assert!(matches!(
+            parse_command(&args(&["오늘", "시황", "근거"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+        assert!(matches!(
+            parse_command(&args(&["오늘", "시황", "--research"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+        assert!(matches!(
+            parse_command(&args(&["오늘", "복기", "--research"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+        assert!(matches!(
+            parse_command(&args(&["전에", "금리", "찾아줘", "--research"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+        assert_eq!(
+            parse_command(&args(&[
+                "내",
+                "생각",
+                "반도체가",
+                "시장",
+                "주도인지",
+                "확인"
+            ]))
+            .unwrap(),
+            CommandKind::Think
+        );
+        assert_eq!(
+            parse_command(&args(&["전에", "반도체", "확인한", "내용", "찾아줘"])).unwrap(),
+            CommandKind::Find
+        );
+        assert!(matches!(
+            parse_command(&args(&["내", "생각", "반도체", "확인", "--research"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+        assert!(matches!(
+            parse_command(&args(&["--research", "NVDA"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+        assert!(parse_command(&args(&["--bad", "NVDA"])).is_err());
+        assert!(matches!(
+            parse_command(&args(&["NVDA"])).unwrap(),
+            CommandKind::Inquiry { .. }
+        ));
+        assert!(matches!(
+            parse_command(&args(&["NVDA", "리서치"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
+    }
+
+    #[test]
+    fn intent_markers_beat_generic_research_terms_unless_research_flagged() {
+        assert_eq!(
+            parse_command(&args(&[
+                "내",
+                "생각",
+                "반도체가",
+                "시장",
+                "주도인지",
+                "확인"
+            ]))
+            .unwrap(),
+            CommandKind::Think
+        );
+        assert_eq!(
+            parse_command(&args(&["메모", "달러", "움직임", "확인"])).unwrap(),
+            CommandKind::Think
+        );
+        assert_eq!(
+            parse_command(&args(&["전에", "반도체", "확인한", "내용", "찾아줘"])).unwrap(),
+            CommandKind::Find
+        );
+        assert_eq!(
+            parse_command(&args(&["오늘", "복기", "근거"])).unwrap(),
+            CommandKind::Review
+        );
+        assert!(matches!(
+            parse_command(&args(&["내", "생각", "반도체", "확인", "--research"])).unwrap(),
+            CommandKind::Research { .. }
+        ));
     }
 
     #[test]
@@ -3350,6 +4272,19 @@ mod tests {
     }
 
     #[test]
+    fn review_counts_radar_and_fomo_checkpoint_events() {
+        let events = vec![
+            "{\"type\":\"radar\",\"timestamp\":\"2026-04-23T09:00:00+0900\",\"scenario\":\"Semis-led growth risk-on; watch BTC/KOSPI confirmation\",\"confirm\":\"Semis and Nasdaq keep leading\",\"falsify\":\"Semis lose leadership first\",\"watch\":\"Semis vs Nasdaq\",\"prompt\":\"Run mp think\"}".into(),
+            "{\"type\":\"fomo_check\",\"timestamp\":\"2026-04-23T09:05:00+0900\",\"linked_radar_timestamp\":\"2026-04-23T09:00:00+0900\",\"scenario\":\"Semis-led growth risk-on; watch BTC/KOSPI confirmation\",\"prompt\":\"Run mp think\"}".into(),
+        ];
+        let out = render_review_from_events(&events, "/tmp/journal.jsonl");
+
+        assert!(out.contains("radars 1"));
+        assert!(out.contains("fomo 1"));
+        assert!(out.contains("semis"));
+    }
+
+    #[test]
     fn review_date_filter_keeps_only_matching_timestamp_date() {
         let events = vec![
             "{\"type\":\"inquiry\",\"timestamp\":\"2026-04-20T09:00:00+0900\",\"question\":\"달러가 코스피에 부담?\",\"thesis_type\":\"dollar-liquidity transmission thesis\",\"concepts\":\"dollar liquidity\"}".into(),
@@ -3439,12 +4374,73 @@ mod tests {
     fn calendar_renders_review_shortcuts_and_boundary() {
         let out = render_calendar();
         assert!(out.contains("Market Pulse Calendar"));
+        assert!(out.contains("Local date windows"));
         assert!(out.contains("today:"));
+        assert!(out.contains("yesterday:"));
         assert!(out.contains("this-week:"));
         assert!(out.contains("last-week:"));
+        assert!(out.contains("mp review --today"));
+        assert!(out.contains("mp review --yesterday"));
         assert!(out.contains("mp review --this-week"));
+        assert!(out.contains("mp review --last-week"));
         assert!(out.contains("not fuzzy full-text search"));
-        assert!(out.contains("not exchange-holiday calendars"));
+        assert!(out.contains("static MVP") || out.contains("Static exchange-session MVP"));
+        assert!(out.contains("not a full official holiday/early-close calendar"));
+        assert!(out.contains("not") && out.contains("trading signal"));
+    }
+
+    #[test]
+    fn calendar_renders_exchange_session_section() {
+        let out = render_calendar();
+        assert!(out.contains("Exchange sessions (static MVP)"));
+        assert!(out.contains("US equities"));
+        assert!(out.contains("NYSE/Nasdaq"));
+        assert!(out.contains("Korea equities"));
+        assert!(out.contains("KRX/KOSPI"));
+        assert!(out.contains("ET"));
+        assert!(out.contains("KST"));
+        assert!(out.contains("09:30-16:00 ET"));
+        assert!(out.contains("09:00-15:30 KST"));
+    }
+
+    #[test]
+    fn calendar_renders_pulse_bridge() {
+        let out = render_calendar();
+        assert!(out.contains("Calendar ↔ pulse bridge"));
+        assert!(out.contains("mp now: close-to-close daily pulse"));
+        assert!(out.contains("mp week: local journal week"));
+        assert!(out.contains("first matching Yahoo daily close"));
+        assert!(out.contains("session dates can differ"));
+    }
+
+    #[test]
+    fn static_equity_session_status_is_weekend_aware() {
+        assert!(static_equity_session_status(Some(1)).contains("weekday"));
+        assert!(static_equity_session_status(Some(5)).contains("weekday"));
+        assert!(static_equity_session_status(Some(6)).contains("weekend"));
+        assert!(static_equity_session_status(Some(7)).contains("weekend"));
+        assert!(static_equity_session_status(None).contains("unavailable"));
+    }
+
+    #[test]
+    fn calendar_output_avoids_trading_advice_language() {
+        let out = render_calendar().to_lowercase();
+        for forbidden in [
+            "buy",
+            "sell",
+            "price target",
+            "stop-loss",
+            "portfolio",
+            "매수",
+            "매도",
+            "손절",
+            "목표가",
+        ] {
+            assert!(
+                !out.contains(forbidden),
+                "calendar output should avoid advice term: {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -3518,6 +4514,20 @@ mod tests {
         assert!(out.contains("금리·달러"));
         assert!(out.contains("local journal only"));
         assert!(out.contains("not live research or trading advice"));
+    }
+
+    #[test]
+    fn find_renders_radar_and_fomo_snippets() {
+        let events = vec![
+            "{\"type\":\"radar\",\"timestamp\":\"2026-04-23T09:00:00+0900\",\"scenario\":\"Semis-led growth risk-on; watch BTC/KOSPI confirmation\",\"prompt\":\"Run mp think\"}".into(),
+            "{\"type\":\"fomo_check\",\"timestamp\":\"2026-04-23T09:05:00+0900\",\"scenario\":\"Semis-led growth risk-on; watch BTC/KOSPI confirmation\",\"prompt\":\"Run mp think\"}".into(),
+        ];
+        let out = render_find_from_events(&events, "/tmp/journal.jsonl", "Semis", "today".into());
+
+        assert!(out.contains("radars 1"));
+        assert!(out.contains("fomo 1"));
+        assert!(out.contains("radar · Semis-led growth"));
+        assert!(out.contains("fomo_check · Semis-led growth"));
     }
 
     #[test]
@@ -3619,6 +4629,299 @@ mod tests {
         assert!(rendered.contains("Basis"));
         assert!(rendered.contains("close-to-close pulse"));
         assert!(rendered.contains("not high/low gap, exact 24h, or weekly return"));
+    }
+
+    #[test]
+    fn pulse_renders_daily_decision_checklist_in_non_compact_output() {
+        let p = compose_cross_asset_test_pulse();
+        let rendered = render_pulse(&p, false);
+
+        assert_eq!(rendered.matches("Daily Decision Checklist").count(), 1);
+        for label in checklist_labels() {
+            assert!(rendered.contains(label), "missing {label}");
+        }
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_labels_stay_in_order() {
+        let p = compose_cross_asset_test_pulse();
+        let rendered = render_pulse(&p, false);
+        let checklist = checklist_section(&rendered);
+
+        assert_eq!(
+            checklist
+                .lines()
+                .filter(|line| line.starts_with("  "))
+                .count(),
+            6
+        );
+        let mut previous = 0;
+        for label in checklist_labels() {
+            assert_eq!(checklist.matches(label).count(), 1);
+            let current = checklist.find(label).expect("label should be present");
+            assert!(current >= previous, "{label} rendered out of order");
+            previous = current;
+        }
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_sits_between_seeds_and_source_notes() {
+        let mut p = compose_cross_asset_test_pulse();
+        p.notes = vec!["fixture quote source".into()];
+        let rendered = render_pulse(&p, false);
+
+        let seeds = rendered
+            .find("Market puzzle / question seeds")
+            .expect("question seeds should render");
+        let checklist = rendered
+            .find("Daily Decision Checklist")
+            .expect("checklist should render");
+        let notes = rendered
+            .find("Source notes")
+            .expect("source notes should render");
+
+        assert!(seeds < checklist);
+        assert!(checklist < notes);
+    }
+
+    #[test]
+    fn radar_renders_daily_context_and_fomo_checkpoint() {
+        let p = compose_cross_asset_test_pulse();
+        let checklist = daily_decision_checklist(&p);
+        let rendered = render_radar(&p, &checklist);
+
+        assert!(rendered.contains("Market Radar"));
+        assert!(rendered.contains("Scenario:"));
+        assert!(rendered.contains("Watch:"));
+        assert!(rendered.contains("Confirm:"));
+        assert!(rendered.contains("Falsify:"));
+        assert!(rendered.contains("FOMO checkpoint"));
+        assert!(rendered.contains("opportunity-cost fear"));
+        assert!(rendered.contains("Reasoning support only"));
+    }
+
+    #[test]
+    fn radar_output_avoids_trading_advice_language() {
+        let p = compose_cross_asset_test_pulse();
+        let checklist = daily_decision_checklist(&p);
+        let rendered = render_radar(&p, &checklist).to_lowercase();
+        for forbidden in [
+            "buy",
+            "sell",
+            "price target",
+            "stop-loss",
+            "portfolio",
+            "매수",
+            "매도",
+            "손절",
+            "목표가",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "radar output should avoid advice term: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn fomo_checkpoint_renders_linked_context_and_prompts() {
+        let checkpoint = FomoCheckpoint {
+            timestamp: "2026-04-23T10:00:00+0900".into(),
+            linked_pulse: Some("2026-04-23T09:55:00+0900".into()),
+            linked_radar: Some("2026-04-23T09:56:00+0900".into()),
+            scenario: Some("Semis-led growth risk-on; watch BTC/KOSPI confirmation".into()),
+            confirm: Some("Semis and Nasdaq keep leading while BTC and KOSPI confirm.".into()),
+            falsify: Some("Semis lose leadership first.".into()),
+            watch: Some("Semis vs Nasdaq, BTC, KOSPI, DXY, USD/KRW, and US 10Y.".into()),
+            prompt: FOMO_JOURNAL_PROMPT.into(),
+        };
+        let rendered = render_fomo_checkpoint(&checkpoint);
+
+        assert!(rendered.contains("FOMO Checkpoint"));
+        assert!(rendered.contains("Latest radar: 2026-04-23T09:56:00+0900"));
+        assert!(rendered.contains("Latest pulse: 2026-04-23T09:55:00+0900"));
+        assert!(rendered.contains("opportunity-cost fear"));
+        assert!(rendered.contains("Carry-over checks"));
+        assert!(rendered.contains("Next journal prompt"));
+        assert!(rendered.contains("Reasoning support only"));
+    }
+
+    #[test]
+    fn fomo_checkpoint_falls_back_without_prior_radar() {
+        let checkpoint = FomoCheckpoint {
+            timestamp: "2026-04-23T10:00:00+0900".into(),
+            linked_pulse: None,
+            linked_radar: None,
+            scenario: None,
+            confirm: None,
+            falsify: None,
+            watch: None,
+            prompt: FOMO_JOURNAL_PROMPT.into(),
+        };
+        let rendered = render_fomo_checkpoint(&checkpoint);
+
+        assert!(rendered.contains("Latest radar: not recorded yet"));
+        assert!(rendered.contains("run `mp watch`"));
+        assert!(!rendered.contains("Carry-over checks"));
+    }
+
+    #[test]
+    fn radar_and_fomo_json_are_reviewable_events() {
+        let p = compose_cross_asset_test_pulse();
+        let checklist = daily_decision_checklist(&p);
+        let radar = radar_json(&p, &checklist);
+        assert!(radar.contains("\"type\":\"radar\""));
+        assert!(radar.contains("\"linked_pulse_timestamp\""));
+        assert!(radar.contains("\"scenario\""));
+        assert!(radar.contains("\"prompt\""));
+
+        let checkpoint = FomoCheckpoint {
+            timestamp: "2026-04-23T10:00:00+0900".into(),
+            linked_pulse: Some("pulse-ts".into()),
+            linked_radar: Some("radar-ts".into()),
+            scenario: Some(checklist.scenario.into()),
+            confirm: Some(checklist.confirm.into()),
+            falsify: Some(checklist.falsify.into()),
+            watch: Some(checklist.watch.into()),
+            prompt: FOMO_JOURNAL_PROMPT.into(),
+        };
+        let fomo = fomo_check_json(&checkpoint);
+        assert!(fomo.contains("\"type\":\"fomo_check\""));
+        assert!(fomo.contains("\"linked_radar_timestamp\":\"radar-ts\""));
+        assert!(fomo.contains("\"linked_pulse_timestamp\":\"pulse-ts\""));
+        assert!(fomo.contains("\"scenario\""));
+    }
+
+    #[test]
+    fn pulse_compact_output_excludes_daily_decision_checklist() {
+        let p = compose_cross_asset_test_pulse();
+        let rendered = render_pulse(&p, true);
+
+        assert!(rendered.starts_with("[mp] "));
+        assert_eq!(rendered.lines().count(), 1);
+        assert!(rendered.contains(" · "));
+        assert!(rendered.contains("Puzzle: "));
+        assert!(!rendered.contains("Daily Decision Checklist"));
+        for label in checklist_labels() {
+            assert!(!rendered.contains(label), "compact output leaked {label}");
+        }
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_avoids_advice_language_and_unsupported_semis_claims() {
+        let p = compose_cross_asset_test_pulse();
+        let rendered = render_pulse(&p, false);
+        let checklist = checklist_section(&rendered).to_lowercase();
+
+        for forbidden in [
+            "buy",
+            "sell",
+            "price target",
+            "stop-loss",
+            "position size",
+            "portfolio",
+            "매수",
+            "매도",
+            "손절",
+            "비중",
+            "semis-led",
+            "semiconductor strength",
+        ] {
+            assert!(
+                !checklist.contains(forbidden),
+                "checklist should not contain {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_is_not_persisted_in_pulse_json() {
+        let p = compose_cross_asset_test_pulse();
+        let json = pulse_json(&p);
+
+        assert!(!json.contains("Daily Decision Checklist"));
+        assert!(!json.contains("Scenario"));
+        assert!(!json.contains("Confirm"));
+        assert!(!json.contains("Falsify"));
+        assert!(!json.contains("Discipline"));
+        assert!(!json.contains("Journal"));
+    }
+
+    #[test]
+    fn sox_proxy_is_pulse_only_not_shared_with_week_or_regime() {
+        assert!(!SYMBOLS.iter().any(|(symbol, _, _)| *symbol == "^SOX"));
+        assert_eq!(PULSE_ONLY_SYMBOLS, &[("^SOX", "Semis", "")]);
+
+        let week = render_week(&compose_test_week(compose_base_test_assets()), &[]);
+        let regime = render_regime(&compose_test_regime(compose_base_test_assets()));
+
+        assert!(!week.contains("Semis"));
+        assert!(!regime.contains("Semis"));
+    }
+
+    #[test]
+    fn pulse_renders_pulse_only_semis_asset_in_non_compact_output() {
+        let p = compose_semis_test_pulse(Some(2.0), 1.2, 0.7, 0.0);
+        let rendered = render_pulse(&p, false);
+
+        assert!(rendered.contains("  - Semis: 100.00 (+2.00%)"));
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_detects_semis_led_growth_without_macro_pressure() {
+        let p = compose_semis_test_pulse(Some(2.0), 1.2, 0.7, 0.0);
+        let rendered = render_pulse(&p, false);
+        let checklist = checklist_section(&rendered);
+
+        assert!(
+            checklist.contains("Scenario: Semis-led growth risk-on; watch BTC/KOSPI confirmation")
+        );
+        assert!(checklist.contains("Confirm: Semis and Nasdaq keep leading"));
+        assert!(checklist.contains("Watch: Semis vs Nasdaq"));
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_detects_semis_led_growth_with_macro_pressure() {
+        let p = compose_semis_test_pulse(Some(2.0), 1.2, 0.7, 0.8);
+        let rendered = render_pulse(&p, false);
+        let checklist = checklist_section(&rendered);
+
+        assert!(
+            checklist.contains("Scenario: Semis-led growth risk-on; macro confirmation incomplete")
+        );
+        assert!(checklist.contains("dollar/rates pressure stops rising"));
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_detects_weak_semis_when_available() {
+        let p = compose_semis_test_pulse(Some(-0.6), 1.2, 0.7, 0.0);
+        let rendered = render_pulse(&p, false);
+        let checklist = checklist_section(&rendered);
+
+        assert!(checklist.contains(
+            "Scenario: Growth leadership fading; watch whether semis or BTC breaks first"
+        ));
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_detects_nasdaq_without_semis_confirmation() {
+        let p = compose_semis_test_pulse(Some(0.2), 1.2, 0.7, 0.0);
+        let rendered = render_pulse(&p, false);
+        let checklist = checklist_section(&rendered);
+
+        assert!(
+            checklist.contains("Scenario: Nasdaq risk-on with semis confirmation still pending")
+        );
+    }
+
+    #[test]
+    fn pulse_daily_decision_checklist_does_not_claim_semis_leadership_without_semis_change() {
+        let p = compose_semis_test_pulse(None, 1.2, 0.7, 0.0);
+        let rendered = render_pulse(&p, false);
+        let checklist = checklist_section(&rendered).to_lowercase();
+
+        assert!(!checklist.contains("semis-led"));
+        assert!(!checklist.contains("semiconductor leadership"));
     }
 
     #[test]
@@ -3764,6 +5067,129 @@ mod tests {
         assert!(rendered.contains("rename this week"));
         assert!(rendered.contains("rates"));
         assert!(rendered.contains("not investment advice"));
+    }
+
+    fn compose_base_test_assets() -> Vec<Asset> {
+        vec![
+            Asset {
+                symbol: "^GSPC",
+                label: "S&P 500",
+                unit: "",
+                value: Some(100.0),
+                change: Some(1.2),
+                note: None,
+            },
+            Asset {
+                symbol: "^IXIC",
+                label: "Nasdaq",
+                unit: "",
+                value: Some(100.0),
+                change: Some(2.0),
+                note: None,
+            },
+            Asset {
+                symbol: "^KS11",
+                label: "KOSPI",
+                unit: "",
+                value: Some(100.0),
+                change: Some(0.8),
+                note: None,
+            },
+            Asset {
+                symbol: "KRW=X",
+                label: "USD/KRW",
+                unit: "KRW",
+                value: Some(1400.0),
+                change: Some(0.2),
+                note: None,
+            },
+            Asset {
+                symbol: "DX-Y.NYB",
+                label: "DXY",
+                unit: "",
+                value: Some(105.0),
+                change: Some(0.3),
+                note: None,
+            },
+            Asset {
+                symbol: "^TNX",
+                label: "US 10Y",
+                unit: "%",
+                value: Some(4.8),
+                change: Some(0.8),
+                note: None,
+            },
+            Asset {
+                symbol: "CL=F",
+                label: "WTI",
+                unit: "USD",
+                value: Some(70.0),
+                change: Some(1.2),
+                note: None,
+            },
+            Asset {
+                symbol: "BTC-USD",
+                label: "BTC",
+                unit: "USD",
+                value: Some(100000.0),
+                change: Some(3.0),
+                note: None,
+            },
+        ]
+    }
+
+    fn compose_cross_asset_test_pulse() -> Pulse {
+        compose_test_pulse(compose_base_test_assets())
+    }
+
+    fn compose_semis_test_pulse(
+        semis_change: Option<f64>,
+        nasdaq_change: f64,
+        spx_change: f64,
+        rates_change: f64,
+    ) -> Pulse {
+        let mut assets = compose_base_test_assets();
+        for asset in &mut assets {
+            match asset.symbol {
+                "^GSPC" => asset.change = Some(spx_change),
+                "^IXIC" => asset.change = Some(nasdaq_change),
+                "^TNX" => asset.change = Some(rates_change),
+                "KRW=X" | "DX-Y.NYB" | "CL=F" => asset.change = Some(0.0),
+                "^KS11" => asset.change = Some(0.8),
+                "BTC-USD" => asset.change = Some(2.0),
+                _ => {}
+            }
+        }
+        assets.push(Asset {
+            symbol: "^SOX",
+            label: "Semis",
+            unit: "",
+            value: Some(100.0),
+            change: semis_change,
+            note: None,
+        });
+        compose_test_pulse(assets)
+    }
+
+    fn checklist_labels() -> [&'static str; 6] {
+        [
+            "  Scenario:",
+            "  Confirm:",
+            "  Falsify:",
+            "  Watch:",
+            "  Discipline:",
+            "  Journal:",
+        ]
+    }
+
+    fn checklist_section(rendered: &str) -> &str {
+        rendered
+            .split("Daily Decision Checklist")
+            .nth(1)
+            .expect("checklist section should render")
+            .split("\nSource notes")
+            .next()
+            .expect("checklist section should be split from notes")
     }
 
     fn compose_test_pulse(assets: Vec<Asset>) -> Pulse {
