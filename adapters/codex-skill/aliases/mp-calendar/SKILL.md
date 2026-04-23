@@ -1,6 +1,6 @@
 ---
 name: mp-calendar
-description: "Run market-pulse calendar mode for a compact market-calendar report with local review windows, static US/Korea equity-session context, and mp now/week interpretation hints. Use when the user says $mp-calendar or wants to inspect today/yesterday/this-week/last-week review windows plus market session context."
+description: "Run market-pulse calendar mode for a compact market-calendar report with local review windows, deterministic curated US/Korea equity-session context, and mp now/week interpretation hints. Use when the user says $mp-calendar or wants to inspect today/yesterday/this-week/last-week review windows plus market session context."
 argument-hint: ""
 ---
 
@@ -10,7 +10,7 @@ Use the local `mp` CLI. Keep this alias thin: do not reimplement market-pulse in
 
 - `$mp-calendar` -> run `mp calendar`
 
-This alias takes no required argument. It prints local-date windows, static US/Korea equity-session context, a compact `mp now` / `mp week` pulse bridge, and the matching `mp review` shortcut commands. If extra market text is provided, prefer `$mp-ask` or `$mp-research` instead of guessing.
+This alias takes no required argument. It prints local-date windows, deterministic curated US/Korea equity-session context, a compact `mp now` / `mp week` pulse bridge, and the matching `mp review` shortcut commands. If extra market text is provided, prefer `$mp-ask` or `$mp-research` instead of guessing.
 
 ## Example CLI call
 
@@ -34,7 +34,7 @@ SOURCE: Keep this block textually consistent with `/Users/veluga/.codex/skills/m
 - Do not auto-capture arbitrary market/economy sentences; only run this alias when explicitly invoked.
 - Do not make live/API search automatic. Research/source lookup remains explicit through `$mp-research` or existing `mp ... --research` flows.
 - Do not add trading advice or portfolio guidance.
-- Do not treat the static MVP as a full official exchange-holiday/early-close calendar, live event calendar, trading signal, or market session proof.
+- Do not treat the deterministic curated static context as a live official exchange feed, complete global calendar, live event/news calendar, trading signal, or market session proof. US grouped rows can be `source-limited`; KRX may remain partial.
 
 ## Fallback
 

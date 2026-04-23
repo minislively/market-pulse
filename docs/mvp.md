@@ -104,11 +104,21 @@ Acceptance criteria:
 
 - Prints a compact market-calendar report, not only local date shortcuts.
 - Preserves local-date windows for `today`, `yesterday`, `this-week`, and `last-week`.
-- Shows static exchange-session context for US equities (NYSE/Nasdaq, 09:30-16:00 ET) and Korea equities (KRX/KOSPI, 09:00-15:30 KST).
-- Includes a calendar-to-pulse bridge explaining that `mp now` is close-to-close daily context and `mp week` combines the local journal week with the first matching Yahoo daily close.
+- Shows exchange-local context for US equities (NYSE/Nasdaq, 09:30-16:00 ET) and Korea equities (KRX/KOSPI, 09:00-15:30 KST).
+- Uses deterministic curated static calendar rules: US coverage metadata includes 2026 and 2027; KRX coverage is explicit about full vs partial status.
+- Handles NYSE/Nasdaq grouped-row source divergence by rendering `source-limited` instead of full official proof when source coverage is incomplete or disagrees.
+- Renders KRX partial coverage as partial wording such as `regular session by partial KRX rules`; it must not imply full year-specific Korean holiday proof unless that data is curated.
+- Includes source/freshness boundaries and a calendar-to-pulse bridge explaining that `mp now` is close-to-close daily context and `mp week` combines the local journal week with the first matching Yahoo daily close.
 - Shows the matching `mp review` shortcut commands.
-- Names the boundary that this is a static MVP, not a full official holiday/early-close calendar, live event calendar, or trading signal.
+- Names the boundary that this is deterministic curated static context, not a live official exchange feed, live event/news calendar, or trading signal.
 - Does not save a journal event.
+
+Source anchors:
+
+- Nasdaq holiday/trading hours: https://www.nasdaq.com/market-activity/stock-market-holiday-schedule
+- NYSE 2026/2027/2028 holiday + early close release: https://s2.q4cdn.com/154085107/files/doc_news/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar-2025.pdf
+- KRX trading guide: https://global.krx.co.kr/contents/GLB/01/0109/0109000000/guide_to_trading_in_the_korean_stock_market.pdf
+- KRX Market Closing(Holiday): https://global.krx.co.kr/contents/GLB/05/0501/0501110000/GLB0501110000.jsp
 
 ### `mp regime`
 

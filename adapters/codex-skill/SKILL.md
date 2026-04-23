@@ -1,6 +1,6 @@
 ---
 name: mp
-description: "Run market-pulse CLI commands for terminal-native market inquiry, research-backed inquiry scaffolds, market context, daily radar/FOMO checkpoints, weekly learning, calendar windows, local journal recall, user-thought feedback, and review. Use when the user says $mp, mp <question>, mp ask, mp research, mp now, mp watch, mp fomo, mp week, mp calendar, mp regime, mp think, mp review, mp find, 오늘 시황, 시장 펄스, 이번주 복기, 전에 금리 찾아줘, NVDA 리서치, 포모, or asks for market-thinking feedback."
+description: "Run market-pulse CLI commands for terminal-native market inquiry, research-backed inquiry scaffolds, market context, daily radar/FOMO checkpoints, weekly learning, curated calendar windows, local journal recall, user-thought feedback, and review. Use when the user says $mp, mp <question>, mp ask, mp research, mp now, mp watch, mp fomo, mp week, mp calendar, mp regime, mp think, mp review, mp find, 오늘 시황, 시장 펄스, 이번주 복기, 전에 금리 찾아줘, NVDA 리서치, 포모, or asks for market-thinking feedback."
 argument-hint: "[question]|ask [question]|research [question]|now|watch|fomo|week|calendar|regime|think|review [selector]|find [query]"
 ---
 
