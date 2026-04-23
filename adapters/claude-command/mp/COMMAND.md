@@ -133,7 +133,7 @@ mp week
 mp calendar
 ```
 
-로컬 리뷰 날짜창과 함께 US equities(NYSE/Nasdaq) / Korea equities(KRX/KOSPI)의 static regular-session 문맥, `mp now` / `mp week` close-basis 해석 브릿지를 보여줍니다. 첫 버전은 full holiday/early-close DB나 live event calendar가 아니라는 경계를 유지합니다.
+로컬 리뷰 날짜창과 함께 US equities(NYSE/Nasdaq) / Korea equities(KRX/KOSPI)의 exchange-local regular-session 문맥, curated static holiday/early-close coverage, source/freshness boundary, `mp now` / `mp week` close-basis 해석 브릿지를 보여줍니다. 기본 동작은 live event/news calendar가 아니며, NYSE/Nasdaq source divergence는 `source-limited`, KRX full holiday coverage가 부족하면 partial wording으로 표시합니다.
 
 ### `/mp regime`
 

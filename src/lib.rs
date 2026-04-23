@@ -2959,45 +2959,253 @@ fn render_feedback(f: &Feedback) -> String {
     out
 }
 
-struct ExchangeSessionRow {
-    label: &'static str,
-    regular_hours: &'static str,
-    status: &'static str,
-    note: &'static str,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CalendarCoverage {
+    Full,
+    Partial,
+    SourceLimited,
+    Unavailable,
 }
 
-fn static_equity_session_status(weekday: Option<u32>) -> &'static str {
-    match weekday {
-        Some(1..=5) => "weekday under static MVP rules; holidays/early closes not modeled",
-        Some(6 | 7) => "weekend under static MVP rules; regular equity session closed",
-        _ => "status unavailable under static MVP rules",
+impl CalendarCoverage {
+    fn label(self) -> &'static str {
+        match self {
+            CalendarCoverage::Full => "full curated static coverage",
+            CalendarCoverage::Partial => "partial curated static coverage",
+            CalendarCoverage::SourceLimited => "source-limited coverage",
+            CalendarCoverage::Unavailable => "coverage unavailable/stale",
+        }
     }
 }
 
-fn exchange_session_rows(weekday: Option<u32>) -> [ExchangeSessionRow; 2] {
-    let status = static_equity_session_status(weekday);
-    [
-        ExchangeSessionRow {
-            label: "US equities (NYSE/Nasdaq, ET)",
-            regular_hours: "09:30-16:00 ET",
-            status,
-            note: "Korea-local date can differ from the US session date; use this as session context, not official open-now proof.",
-        },
-        ExchangeSessionRow {
-            label: "Korea equities (KRX/KOSPI, KST)",
-            regular_hours: "09:00-15:30 KST",
-            status,
-            note: "Holidays and early closes are not modeled in this first pass.",
-        },
-    ]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExchangeGroup {
+    UsEquities,
+    KoreaEquities,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceAgreement {
+    Agree,
+    NyseOnly,
+    NasdaqOnly,
+    BothMissing,
+    Disagree,
+}
+
+const US_SOURCE_AGREEMENT_MATRIX: &[SourceAgreement] = &[
+    SourceAgreement::Agree,
+    SourceAgreement::NyseOnly,
+    SourceAgreement::NasdaqOnly,
+    SourceAgreement::BothMissing,
+    SourceAgreement::Disagree,
+];
+
+fn source_agreement_label(agreement: SourceAgreement) -> &'static str {
+    match agreement {
+        SourceAgreement::Agree => "NYSE+Nasdaq agree",
+        SourceAgreement::NyseOnly => "NYSE only",
+        SourceAgreement::NasdaqOnly => "Nasdaq only",
+        SourceAgreement::BothMissing => "both missing",
+        SourceAgreement::Disagree => "sources disagree",
+    }
+}
+
+fn source_matrix_summary() -> String {
+    US_SOURCE_AGREEMENT_MATRIX
+        .iter()
+        .map(|agreement| source_agreement_label(*agreement))
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ClosureRule {
+    date: &'static str,
+    reason: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EarlyCloseRule {
+    date: &'static str,
+    close_minutes: u16,
+    close_label: &'static str,
+    reason: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ExchangeCalendar {
+    group: ExchangeGroup,
+    label: &'static str,
+    exchange_tz: &'static str,
+    regular_hours: &'static str,
+    regular_open_minutes: u16,
+    regular_close_minutes: u16,
+    coverage_years: &'static [i32],
+    last_curated: &'static str,
+    source_labels: &'static [&'static str],
+    closures: &'static [ClosureRule],
+    early_closes: &'static [EarlyCloseRule],
+    default_coverage: CalendarCoverage,
+    coverage_note: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExchangeDateTime {
+    date: String,
+    time: String,
+    weekday: u32,
+    zone: String,
+}
+
+impl ExchangeDateTime {
+    fn minutes(&self) -> Option<u16> {
+        parse_hhmm_minutes(&self.time)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ExchangeSessionRow {
+    label: &'static str,
+    exchange_local: String,
+    regular_hours: &'static str,
+    coverage: CalendarCoverage,
+    status: String,
+    note: &'static str,
+}
+
+const US_COVERAGE_YEARS: &[i32] = &[2026, 2027];
+const KR_COVERAGE_YEARS: &[i32] = &[2026, 2027];
+
+const US_SOURCES: &[&str] = &[
+    "Nasdaq 2026 holiday schedule",
+    "NYSE Group 2026-2028 holiday/early-close release",
+];
+const KRX_SOURCES: &[&str] = &["KRX trading guide", "KRX Market Closing(Holiday) page"];
+
+const US_CLOSURES: &[ClosureRule] = &[
+    ClosureRule {
+        date: "2026-01-01",
+        reason: "New Year's Day",
+    },
+    ClosureRule {
+        date: "2026-01-19",
+        reason: "Martin Luther King Jr. Day",
+    },
+    ClosureRule {
+        date: "2026-02-16",
+        reason: "Washington's Birthday / Presidents Day",
+    },
+    ClosureRule {
+        date: "2026-04-03",
+        reason: "Good Friday",
+    },
+    ClosureRule {
+        date: "2026-05-25",
+        reason: "Memorial Day",
+    },
+    ClosureRule {
+        date: "2026-06-19",
+        reason: "Juneteenth National Independence Day",
+    },
+    ClosureRule {
+        date: "2026-07-03",
+        reason: "Independence Day observed",
+    },
+    ClosureRule {
+        date: "2026-09-07",
+        reason: "Labor Day",
+    },
+    ClosureRule {
+        date: "2026-11-26",
+        reason: "Thanksgiving Day",
+    },
+    ClosureRule {
+        date: "2026-12-25",
+        reason: "Christmas Day",
+    },
+    // NYSE publishes 2027 dates, but Nasdaq grouped-row proof is source-limited until
+    // the Nasdaq source also provides matching 2027 coverage.
+    ClosureRule {
+        date: "2027-01-01",
+        reason: "New Year's Day (NYSE source; grouped proof source-limited)",
+    },
+];
+
+const US_EARLY_CLOSES: &[EarlyCloseRule] = &[
+    EarlyCloseRule {
+        date: "2026-11-27",
+        close_minutes: 13 * 60,
+        close_label: "13:00 ET",
+        reason: "Day after Thanksgiving",
+    },
+    EarlyCloseRule {
+        date: "2026-12-24",
+        close_minutes: 13 * 60,
+        close_label: "13:00 ET",
+        reason: "Christmas Eve",
+    },
+];
+
+const KRX_CLOSURES: &[ClosureRule] = &[
+    ClosureRule {
+        date: "2026-05-01",
+        reason: "Labor Day",
+    },
+    ClosureRule {
+        date: "2026-12-31",
+        reason: "KRX year-end closure (structural source)",
+    },
+    ClosureRule {
+        date: "2027-05-01",
+        reason: "Labor Day",
+    },
+    ClosureRule {
+        date: "2027-12-31",
+        reason: "KRX year-end closure (structural source)",
+    },
+];
+
+const NO_EARLY_CLOSES: &[EarlyCloseRule] = &[];
+
+const US_EQUITIES_CALENDAR: ExchangeCalendar = ExchangeCalendar {
+    group: ExchangeGroup::UsEquities,
+    label: "US equities (NYSE/Nasdaq)",
+    exchange_tz: "America/New_York",
+    regular_hours: "09:30-16:00 ET",
+    regular_open_minutes: 9 * 60 + 30,
+    regular_close_minutes: 16 * 60,
+    coverage_years: US_COVERAGE_YEARS,
+    last_curated: "2026-04-23",
+    source_labels: US_SOURCES,
+    closures: US_CLOSURES,
+    early_closes: US_EARLY_CLOSES,
+    default_coverage: CalendarCoverage::Full,
+    coverage_note: "Grouped NYSE/Nasdaq row is full only when both sources cover and agree; 2027 remains source-limited if Nasdaq coverage is absent.",
+};
+
+const KRX_EQUITIES_CALENDAR: ExchangeCalendar = ExchangeCalendar {
+    group: ExchangeGroup::KoreaEquities,
+    label: "Korea equities (KRX/KOSPI)",
+    exchange_tz: "Asia/Seoul",
+    regular_hours: "09:00-15:30 KST",
+    regular_open_minutes: 9 * 60,
+    regular_close_minutes: 15 * 60 + 30,
+    coverage_years: KR_COVERAGE_YEARS,
+    last_curated: "2026-04-23",
+    source_labels: KRX_SOURCES,
+    closures: KRX_CLOSURES,
+    early_closes: NO_EARLY_CLOSES,
+    default_coverage: CalendarCoverage::Partial,
+    coverage_note: "KRX regular hours and structural closures are curated, but full year-specific Korean public-holiday coverage is partial.",
+};
 
 fn render_calendar() -> String {
     let today = date_for_days_ago(0).unwrap_or_else(|_| "unavailable".into());
     let yesterday = date_for_days_ago(1).unwrap_or_else(|_| "unavailable".into());
     let this_week = current_week_date_prefixes();
     let last_week = last_week_date_prefixes();
-    let weekday = iso_weekday();
+    let rows = exchange_session_rows_with_clock(&SystemExchangeClock);
     let mut out = format!(
         "Market Pulse Calendar · {}\n\nLocal date windows\n",
         timestamp()
@@ -3012,16 +3220,36 @@ fn render_calendar() -> String {
         "  - last-week: {}\n",
         week_window_label(&last_week)
     ));
-    out.push_str("\nExchange sessions (static MVP)\n");
-    for row in exchange_session_rows(weekday) {
+    out.push_str("\nExchange sessions (curated static rules)\n");
+    for row in rows {
         out.push_str(&format!(
-            "  - {}: regular {}; {}\n",
-            row.label, row.regular_hours, row.status
+            "  - {}: {}; regular {}; {}; coverage {}\n",
+            row.label,
+            row.exchange_local,
+            row.regular_hours,
+            row.status,
+            row.coverage.label()
         ));
         out.push_str(&format!("    note: {}\n", row.note));
     }
+    out.push_str("\nSource / freshness\n");
+    for calendar in [&US_EQUITIES_CALENDAR, &KRX_EQUITIES_CALENDAR] {
+        out.push_str(&format!(
+            "  - {}: years {}; last curated {}; sources: {}; {}{}\n",
+            calendar.label,
+            year_list(calendar.coverage_years),
+            calendar.last_curated,
+            calendar.source_labels.join(" + "),
+            calendar.coverage_note,
+            if matches!(calendar.group, ExchangeGroup::UsEquities) {
+                format!(" matrix: {}.", source_matrix_summary())
+            } else {
+                String::new()
+            }
+        ));
+    }
     out.push_str(
-        "\nCalendar ↔ pulse bridge\n  - mp now: close-to-close daily pulse; read it against latest available exchange closes, not only the local date.\n  - mp week: local journal week plus first matching Yahoo daily close in the current local week.\n  - US/Korea session dates can differ from the Korea local timestamp; this card gives interpretation context, not official exchange proof.\n",
+        "\nCalendar ↔ pulse bridge\n  - mp now: close-to-close daily pulse; read it against latest available exchange closes, not only the local date.\n  - mp week: local journal week plus first matching Yahoo daily close in the current local week.\n  - US/Korea session dates can differ from the Korea local timestamp; this card gives interpretation context, not official live exchange proof.\n",
     );
     out.push_str(
         "\nReview shortcuts\n  - mp review --today\n  - mp review --yesterday\n  - mp review --this-week\n  - mp review --last-week\n",
@@ -3030,9 +3258,238 @@ fn render_calendar() -> String {
         "\nHow market-pulse uses these windows\n  - mp week uses the current local calendar week for journal review.\n  - mp week prices the market window from the first Yahoo close matching the current local week when available.\n  - mp review period aliases filter journal timestamp dates; they are not fuzzy full-text search.\n",
     );
     out.push_str(
-        "\nBoundary\n  Static exchange-session MVP for market literacy; not a full official holiday/early-close calendar, live event calendar, or trading signal.\n",
+        "\nBoundary\n  Deterministic curated static exchange-calendar context for market literacy; not a live official exchange feed, live event/news calendar, or trading signal.\n",
     );
     out
+}
+
+trait ExchangeClock {
+    fn now_in(&self, tz: &str) -> Option<ExchangeDateTime>;
+}
+
+struct SystemExchangeClock;
+
+impl ExchangeClock for SystemExchangeClock {
+    fn now_in(&self, tz: &str) -> Option<ExchangeDateTime> {
+        exchange_datetime_from_system_date(tz)
+    }
+}
+
+fn exchange_datetime_from_system_date(tz: &str) -> Option<ExchangeDateTime> {
+    let output = Command::new("date")
+        .env("TZ", tz)
+        .arg("+%Y-%m-%d %H:%M %u %Z")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_exchange_datetime(&String::from_utf8(output.stdout).ok()?)
+}
+
+fn parse_exchange_datetime(raw: &str) -> Option<ExchangeDateTime> {
+    let parts = raw.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 4 {
+        return None;
+    }
+    validate_review_date(parts[0]).ok()?;
+    let weekday = parts[2]
+        .parse::<u32>()
+        .ok()
+        .filter(|day| (1..=7).contains(day))?;
+    parse_hhmm_minutes(parts[1])?;
+    Some(ExchangeDateTime {
+        date: parts[0].to_string(),
+        time: parts[1].to_string(),
+        weekday,
+        zone: parts[3].to_string(),
+    })
+}
+
+fn parse_hhmm_minutes(value: &str) -> Option<u16> {
+    let (hour, minute) = value.split_once(':')?;
+    let hour = hour.parse::<u16>().ok()?;
+    let minute = minute.parse::<u16>().ok()?;
+    if hour <= 23 && minute <= 59 {
+        Some(hour * 60 + minute)
+    } else {
+        None
+    }
+}
+
+fn exchange_session_rows_with_clock(clock: &dyn ExchangeClock) -> [ExchangeSessionRow; 2] {
+    [
+        exchange_session_row(
+            &US_EQUITIES_CALENDAR,
+            clock.now_in(US_EQUITIES_CALENDAR.exchange_tz),
+        ),
+        exchange_session_row(
+            &KRX_EQUITIES_CALENDAR,
+            clock.now_in(KRX_EQUITIES_CALENDAR.exchange_tz),
+        ),
+    ]
+}
+
+fn exchange_session_row(
+    calendar: &'static ExchangeCalendar,
+    exchange_now: Option<ExchangeDateTime>,
+) -> ExchangeSessionRow {
+    let coverage = coverage_for_exchange_date(calendar, exchange_now.as_ref());
+    let exchange_local = exchange_now
+        .as_ref()
+        .map(|dt| format!("exchange-local {} {} {}", dt.date, dt.time, dt.zone))
+        .unwrap_or_else(|| format!("exchange-local time unavailable ({})", calendar.exchange_tz));
+    ExchangeSessionRow {
+        label: calendar.label,
+        exchange_local,
+        regular_hours: calendar.regular_hours,
+        coverage,
+        status: session_status(calendar, exchange_now.as_ref()),
+        note: calendar.coverage_note,
+    }
+}
+
+fn coverage_for_exchange_date(
+    calendar: &ExchangeCalendar,
+    exchange_now: Option<&ExchangeDateTime>,
+) -> CalendarCoverage {
+    let Some(dt) = exchange_now else {
+        return CalendarCoverage::Unavailable;
+    };
+    let Some(year) = year_from_date(&dt.date) else {
+        return CalendarCoverage::Unavailable;
+    };
+    if !calendar.coverage_years.contains(&year) {
+        return CalendarCoverage::Unavailable;
+    }
+    if matches!(calendar.group, ExchangeGroup::UsEquities) {
+        return grouped_us_coverage_from_agreement(us_source_agreement_for_year(year));
+    }
+    calendar.default_coverage
+}
+
+fn grouped_us_coverage_from_agreement(agreement: SourceAgreement) -> CalendarCoverage {
+    match agreement {
+        SourceAgreement::Agree => CalendarCoverage::Full,
+        SourceAgreement::NyseOnly | SourceAgreement::NasdaqOnly | SourceAgreement::Disagree => {
+            CalendarCoverage::SourceLimited
+        }
+        SourceAgreement::BothMissing => CalendarCoverage::Unavailable,
+    }
+}
+
+fn us_source_agreement_for_year(year: i32) -> SourceAgreement {
+    match year {
+        2026 => SourceAgreement::Agree,
+        2027 => SourceAgreement::NyseOnly,
+        _ => SourceAgreement::BothMissing,
+    }
+}
+
+fn session_status(calendar: &ExchangeCalendar, exchange_now: Option<&ExchangeDateTime>) -> String {
+    let Some(dt) = exchange_now else {
+        return "status unavailable: exchange timestamp unavailable".into();
+    };
+    if dt.weekday >= 6 {
+        return "closed: weekend".into();
+    }
+    let coverage = coverage_for_exchange_date(calendar, Some(dt));
+    if coverage == CalendarCoverage::Unavailable {
+        return format!(
+            "status unavailable: {} outside curated coverage {}",
+            dt.date,
+            year_list(calendar.coverage_years)
+        );
+    }
+    if coverage == CalendarCoverage::SourceLimited {
+        return format!(
+            "source-limited: grouped source coverage is incomplete for {}; not full official open proof",
+            dt.date
+        );
+    }
+    if let Some(rule) = closure_for_date(calendar, &dt.date) {
+        return format!("closed: holiday ({})", rule.reason);
+    }
+    if let Some(rule) = early_close_for_date(calendar, &dt.date) {
+        return early_close_status(calendar, dt, rule);
+    }
+    regular_session_status(calendar, dt, coverage)
+}
+
+fn regular_session_status(
+    calendar: &ExchangeCalendar,
+    dt: &ExchangeDateTime,
+    coverage: CalendarCoverage,
+) -> String {
+    let Some(minutes) = dt.minutes() else {
+        return "status unavailable: exchange timestamp parse failed".into();
+    };
+    let qualifier = match coverage {
+        CalendarCoverage::Full => "under curated static calendar rules",
+        CalendarCoverage::Partial => "by partial KRX rules",
+        CalendarCoverage::SourceLimited => "with source-limited coverage",
+        CalendarCoverage::Unavailable => "with unavailable coverage",
+    };
+    if minutes < calendar.regular_open_minutes {
+        return format!("before regular session {qualifier}");
+    }
+    if minutes >= calendar.regular_close_minutes {
+        return format!("after regular session {qualifier}");
+    }
+    match coverage {
+        CalendarCoverage::Partial => format!("regular session {qualifier}"),
+        _ => format!("open {qualifier}"),
+    }
+}
+
+fn early_close_status(
+    calendar: &ExchangeCalendar,
+    dt: &ExchangeDateTime,
+    rule: &EarlyCloseRule,
+) -> String {
+    let Some(minutes) = dt.minutes() else {
+        return "status unavailable: exchange timestamp parse failed".into();
+    };
+    if minutes < calendar.regular_open_minutes {
+        format!(
+            "before regular session; early close today: closes {} ({})",
+            rule.close_label, rule.reason
+        )
+    } else if minutes < rule.close_minutes {
+        format!(
+            "open under curated static calendar rules; early close today: closes {} ({})",
+            rule.close_label, rule.reason
+        )
+    } else {
+        format!(
+            "after early close: closed after {} ({})",
+            rule.close_label, rule.reason
+        )
+    }
+}
+
+fn closure_for_date<'a>(calendar: &'a ExchangeCalendar, date: &str) -> Option<&'a ClosureRule> {
+    calendar.closures.iter().find(|rule| rule.date == date)
+}
+
+fn early_close_for_date<'a>(
+    calendar: &'a ExchangeCalendar,
+    date: &str,
+) -> Option<&'a EarlyCloseRule> {
+    calendar.early_closes.iter().find(|rule| rule.date == date)
+}
+
+fn year_from_date(date: &str) -> Option<i32> {
+    validate_review_date(date).ok()?;
+    date[0..4].parse().ok()
+}
+
+fn year_list(years: &[i32]) -> String {
+    years
+        .iter()
+        .map(|year| year.to_string())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn journal_path() -> PathBuf {
@@ -4370,6 +4827,23 @@ mod tests {
         .is_err());
     }
 
+    fn fixture_dt(date: &str, time: &str, weekday: u32, zone: &str) -> ExchangeDateTime {
+        ExchangeDateTime {
+            date: date.into(),
+            time: time.into(),
+            weekday,
+            zone: zone.into(),
+        }
+    }
+
+    struct FailingClock;
+
+    impl ExchangeClock for FailingClock {
+        fn now_in(&self, _tz: &str) -> Option<ExchangeDateTime> {
+            None
+        }
+    }
+
     #[test]
     fn calendar_renders_review_shortcuts_and_boundary() {
         let out = render_calendar();
@@ -4384,23 +4858,25 @@ mod tests {
         assert!(out.contains("mp review --this-week"));
         assert!(out.contains("mp review --last-week"));
         assert!(out.contains("not fuzzy full-text search"));
-        assert!(out.contains("static MVP") || out.contains("Static exchange-session MVP"));
-        assert!(out.contains("not a full official holiday/early-close calendar"));
+        assert!(out.contains("curated static exchange-calendar context"));
+        assert!(out.contains("not a live official exchange feed"));
         assert!(out.contains("not") && out.contains("trading signal"));
     }
 
     #[test]
     fn calendar_renders_exchange_session_section() {
         let out = render_calendar();
-        assert!(out.contains("Exchange sessions (static MVP)"));
+        assert!(out.contains("Exchange sessions (curated static rules)"));
         assert!(out.contains("US equities"));
         assert!(out.contains("NYSE/Nasdaq"));
         assert!(out.contains("Korea equities"));
         assert!(out.contains("KRX/KOSPI"));
-        assert!(out.contains("ET"));
+        assert!(out.contains("ET") || out.contains("EDT") || out.contains("EST"));
         assert!(out.contains("KST"));
         assert!(out.contains("09:30-16:00 ET"));
         assert!(out.contains("09:00-15:30 KST"));
+        assert!(out.contains("Source / freshness"));
+        assert!(out.contains("last curated 2026-04-23"));
     }
 
     #[test]
@@ -4414,12 +4890,196 @@ mod tests {
     }
 
     #[test]
-    fn static_equity_session_status_is_weekend_aware() {
-        assert!(static_equity_session_status(Some(1)).contains("weekday"));
-        assert!(static_equity_session_status(Some(5)).contains("weekday"));
-        assert!(static_equity_session_status(Some(6)).contains("weekend"));
-        assert!(static_equity_session_status(Some(7)).contains("weekend"));
-        assert!(static_equity_session_status(None).contains("unavailable"));
+    fn us_calendar_has_coverage_metadata() {
+        assert_eq!(US_EQUITIES_CALENDAR.coverage_years, &[2026, 2027]);
+        assert_eq!(US_EQUITIES_CALENDAR.last_curated, "2026-04-23");
+        assert!(US_EQUITIES_CALENDAR
+            .source_labels
+            .iter()
+            .any(|s| s.contains("Nasdaq")));
+        assert!(US_EQUITIES_CALENDAR
+            .source_labels
+            .iter()
+            .any(|s| s.contains("NYSE")));
+        let fixture_2027 = fixture_dt("2027-01-01", "10:00", 5, "EST");
+        assert!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&fixture_2027)).contains("source-limited")
+        );
+    }
+
+    #[test]
+    fn us_calendar_marks_2026_closures() {
+        for (date, reason) in [
+            ("2026-01-01", "New Year's Day"),
+            ("2026-01-19", "Martin Luther King"),
+            ("2026-04-03", "Good Friday"),
+            ("2026-11-26", "Thanksgiving"),
+            ("2026-12-25", "Christmas"),
+        ] {
+            let rule = closure_for_date(&US_EQUITIES_CALENDAR, date).expect("closure fixture");
+            assert!(
+                rule.reason.contains(reason),
+                "{date} should contain {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn us_calendar_marks_2026_early_closes() {
+        for date in ["2026-11-27", "2026-12-24"] {
+            let rule =
+                early_close_for_date(&US_EQUITIES_CALENDAR, date).expect("early close fixture");
+            assert_eq!(rule.close_minutes, 13 * 60);
+            assert_eq!(rule.close_label, "13:00 ET");
+        }
+    }
+
+    #[test]
+    fn kr_calendar_exposes_partial_coverage_metadata() {
+        assert_eq!(
+            KRX_EQUITIES_CALENDAR.default_coverage,
+            CalendarCoverage::Partial
+        );
+        assert!(KRX_EQUITIES_CALENDAR.coverage_note.contains("partial"));
+        let regular_day = fixture_dt("2026-04-23", "10:00", 4, "KST");
+        let status = session_status(&KRX_EQUITIES_CALENDAR, Some(&regular_day));
+        assert!(status.contains("regular session by partial KRX rules"));
+        assert!(!status.contains("open under full curated calendar rules"));
+    }
+
+    #[test]
+    fn us_grouped_row_handles_source_divergence_matrix() {
+        let cases = [
+            (SourceAgreement::Agree, CalendarCoverage::Full),
+            (SourceAgreement::NyseOnly, CalendarCoverage::SourceLimited),
+            (SourceAgreement::NasdaqOnly, CalendarCoverage::SourceLimited),
+            (SourceAgreement::BothMissing, CalendarCoverage::Unavailable),
+            (SourceAgreement::Disagree, CalendarCoverage::SourceLimited),
+        ];
+        for (agreement, expected) in cases {
+            assert_eq!(grouped_us_coverage_from_agreement(agreement), expected);
+        }
+        let out = render_calendar();
+        assert!(out.contains("NYSE+Nasdaq agree"));
+        assert!(out.contains("NYSE only"));
+        assert!(out.contains("Nasdaq only"));
+        assert!(out.contains("both missing"));
+        assert!(out.contains("sources disagree"));
+    }
+
+    #[test]
+    fn exchange_clock_runtime_failure_degrades_to_unavailable() {
+        let rows = exchange_session_rows_with_clock(&FailingClock);
+        for row in rows {
+            assert!(row.status.contains("status unavailable"));
+            assert_eq!(row.coverage, CalendarCoverage::Unavailable);
+            assert!(row.exchange_local.contains("unavailable"));
+        }
+    }
+
+    #[test]
+    fn session_logic_is_fixture_driven() {
+        let dt = fixture_dt("2026-04-23", "10:00", 4, "EDT");
+        let status = session_status(&US_EQUITIES_CALENDAR, Some(&dt));
+        assert!(status.contains("open under curated static calendar rules"));
+    }
+
+    #[test]
+    fn session_status_pre_open_open_after_weekend_holiday_and_early_close() {
+        let pre = fixture_dt("2026-04-23", "08:00", 4, "EDT");
+        assert!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&pre)).contains("before regular session")
+        );
+
+        let open = fixture_dt("2026-04-23", "10:00", 4, "EDT");
+        assert!(session_status(&US_EQUITIES_CALENDAR, Some(&open))
+            .contains("open under curated static calendar rules"));
+
+        let after = fixture_dt("2026-04-23", "16:30", 4, "EDT");
+        assert!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&after)).contains("after regular session")
+        );
+
+        let weekend = fixture_dt("2026-04-25", "10:00", 6, "EDT");
+        assert_eq!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&weekend)),
+            "closed: weekend"
+        );
+
+        let holiday = fixture_dt("2026-11-26", "10:00", 4, "EST");
+        assert!(session_status(&US_EQUITIES_CALENDAR, Some(&holiday))
+            .contains("closed: holiday (Thanksgiving"));
+
+        let early_open = fixture_dt("2026-11-27", "12:00", 5, "EST");
+        assert!(session_status(&US_EQUITIES_CALENDAR, Some(&early_open))
+            .contains("early close today: closes 13:00 ET"));
+
+        let early_after = fixture_dt("2026-11-27", "13:30", 5, "EST");
+        assert!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&early_after)).contains("after early close")
+        );
+    }
+
+    #[test]
+    fn session_status_unavailable_when_outside_coverage() {
+        let dt = fixture_dt("2028-04-23", "10:00", 1, "EDT");
+        assert!(session_status(&US_EQUITIES_CALENDAR, Some(&dt)).contains("status unavailable"));
+    }
+
+    #[test]
+    fn session_date_differs_between_korea_and_us_fixture() {
+        let us = exchange_session_row(
+            &US_EQUITIES_CALENDAR,
+            Some(fixture_dt("2026-04-22", "20:30", 3, "EDT")),
+        );
+        let kr = exchange_session_row(
+            &KRX_EQUITIES_CALENDAR,
+            Some(fixture_dt("2026-04-23", "09:30", 4, "KST")),
+        );
+        assert!(us.exchange_local.contains("2026-04-22"));
+        assert!(kr.exchange_local.contains("2026-04-23"));
+    }
+
+    #[test]
+    fn session_status_precedence_is_deterministic() {
+        assert!(session_status(&US_EQUITIES_CALENDAR, None).contains("timestamp unavailable"));
+        let weekend_holiday = fixture_dt("2026-07-04", "10:00", 6, "EDT");
+        assert_eq!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&weekend_holiday)),
+            "closed: weekend"
+        );
+        let source_limited_holiday = fixture_dt("2027-01-01", "10:00", 5, "EST");
+        assert!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&source_limited_holiday))
+                .contains("source-limited")
+        );
+        let holiday = fixture_dt("2026-01-01", "10:00", 4, "EST");
+        assert!(session_status(&US_EQUITIES_CALENDAR, Some(&holiday)).contains("closed: holiday"));
+        let early = fixture_dt("2026-11-27", "12:00", 5, "EST");
+        assert!(session_status(&US_EQUITIES_CALENDAR, Some(&early)).contains("early close"));
+        let regular = fixture_dt("2026-04-23", "10:00", 4, "EDT");
+        assert!(
+            session_status(&US_EQUITIES_CALENDAR, Some(&regular)).contains("open under curated")
+        );
+        let partial = fixture_dt("2026-04-23", "10:00", 4, "KST");
+        assert!(session_status(&KRX_EQUITIES_CALENDAR, Some(&partial)).contains("partial KRX"));
+    }
+
+    #[test]
+    fn calendar_does_not_render_live_event_agenda() {
+        let out = render_calendar();
+        for forbidden in [
+            "CPI",
+            "FOMC",
+            "earnings agenda",
+            "IPO agenda",
+            "news agenda",
+        ] {
+            assert!(
+                !out.contains(forbidden),
+                "calendar should not include live agenda term {forbidden}"
+            );
+        }
     }
 
     #[test]

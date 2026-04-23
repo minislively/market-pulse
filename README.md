@@ -242,19 +242,31 @@ Prints a hybrid weekly market-and-learning card:
 ### `mp calendar`
 
 Prints a compact market-calendar report. It still shows the local-date windows
-market-pulse uses for journal review, but now adds static exchange-session
-context so `mp now` / `mp week` close-based readings are easier to interpret:
+market-pulse uses for journal review, but now adds deterministic curated
+US/Korea equity exchange-calendar context so `mp now` / `mp week` close-based
+readings are easier to interpret:
 
 - today
 - yesterday
 - this-week
 - last-week
-- US equities (NYSE/Nasdaq) regular-session reference: 09:30-16:00 ET
-- Korea equities (KRX/KOSPI) regular-session reference: 09:00-15:30 KST
+- US equities (NYSE/Nasdaq) exchange-local context with 09:30-16:00 ET regular hours
+- Korea equities (KRX/KOSPI) exchange-local context with 09:00-15:30 KST regular hours
+- curated static coverage/freshness labels, including US 2026/2027 metadata
+- NYSE/Nasdaq grouped-row source handling: full only when sources cover and agree; otherwise `source-limited`
+- KRX partial-coverage wording when full year-specific Korean holiday coverage is not curated
 - a calendar-to-pulse bridge for daily close-to-close and current-week close basis
 - matching `mp review` shortcut commands
-- explicit boundary that this is a static MVP, not a full official
-  holiday/early-close calendar, live event calendar, or trading signal
+- explicit boundary that this is deterministic curated static context, not a live official exchange feed, live event calendar/news agenda, or trading signal
+
+Official source anchors used for the curated static data are Nasdaq's holiday/trading-hours page, NYSE Group's 2026-2028 holiday/early-close release, the KRX trading guide, and the KRX Market Closing(Holiday) page. The CLI keeps labels concise; docs carry the full source/coverage limitations.
+
+Source anchors:
+
+- Nasdaq holiday/trading hours: https://www.nasdaq.com/market-activity/stock-market-holiday-schedule
+- NYSE 2026/2027/2028 holiday + early close release: https://s2.q4cdn.com/154085107/files/doc_news/NYSE-Group-Announces-2026-2027-and-2028-Holiday-and-Early-Closings-Calendar-2025.pdf
+- KRX trading guide: https://global.krx.co.kr/contents/GLB/01/0109/0109000000/guide_to_trading_in_the_korean_stock_market.pdf
+- KRX Market Closing(Holiday): https://global.krx.co.kr/contents/GLB/05/0501/0501110000/GLB0501110000.jsp
 
 Use it when you want to check both the journal date window and the equity-session
 context behind the latest market pulse:
