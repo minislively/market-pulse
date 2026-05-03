@@ -2864,8 +2864,14 @@ fn render_inquiry(i: &Inquiry) -> String {
 }
 
 fn render_research_inquiry(i: &Inquiry, bundle: &ResearchBundle) -> String {
+    let source_backed = !bundle.sources.is_empty();
+    let heading = if source_backed {
+        "Source-backed Research Inquiry"
+    } else {
+        "Research unavailable"
+    };
     let mut out = format!(
-        "Research-backed Inquiry · {} · provider: {}\n\nQuestion breakdown\n",
+        "{heading} · {} · provider: {}\n\nQuestion breakdown\n",
         i.timestamp, bundle.provider
     );
     for x in &i.breakdown {
@@ -2873,10 +2879,9 @@ fn render_research_inquiry(i: &Inquiry, bundle: &ResearchBundle) -> String {
     }
     out.push_str("\nSources checked\n");
     if bundle.sources.is_empty() {
-        out.push_str("  - No configured research source returned metadata.\n");
-        out.push_str(
-            "  - Treat the analysis below as inference scaffolding, not source-backed fact.\n",
-        );
+        out.push_str("  - Source-backed research is unavailable: no configured provider returned source metadata.\n");
+        out.push_str("  - Configure MARKET_PULSE_SEARCH_CMD with a JSONL source bridge for source-backed research.\n");
+        out.push_str("  - Treat the analysis below as inference scaffolding only, not source-backed fact.\n");
     } else {
         for (idx, source) in bundle.sources.iter().enumerate() {
             let published = source
@@ -2903,7 +2908,7 @@ fn render_research_inquiry(i: &Inquiry, bundle: &ResearchBundle) -> String {
     }
     out.push_str("\nWhat the sources suggest\n");
     if bundle.sources.is_empty() {
-        out.push_str("  - No source-backed claim yet; use the inquiry lens below to decide what evidence to fetch next.\n");
+        out.push_str("  - Source-backed research is unavailable in this run; use the inquiry lens below to decide what evidence to fetch next.\n");
     } else {
         for source in &bundle.sources {
             out.push_str(&format!("  - Source-backed: {}\n", source.evidence));
@@ -4512,7 +4517,7 @@ mod tests {
     }
 
     #[test]
-    fn research_output_renders_no_provider_fallback_and_boundary() {
+    fn research_output_renders_no_provider_unavailable_and_boundary() {
         let inquiry = make_inquiry("금리 하락이 성장주에 좋은 신호임?", None);
         let query = ResearchQuery {
             question: inquiry.question.clone(),
@@ -4521,10 +4526,11 @@ mod tests {
         let bundle = research_bundle_from_provider(&NoopResearchProvider, &query);
         let out = render_research_inquiry(&inquiry, &bundle);
         for section in [
-            "Research-backed Inquiry",
+            "Research unavailable",
             "Sources checked",
-            "No configured research source",
-            "inference scaffolding",
+            "Source-backed research is unavailable",
+            "MARKET_PULSE_SEARCH_CMD",
+            "inference scaffolding only",
             "What the sources suggest",
             "Evidence against / counter-view",
             "Data to check next",
@@ -4533,6 +4539,7 @@ mod tests {
         ] {
             assert!(out.contains(section), "missing section: {section}");
         }
+        assert!(!out.contains("Research-backed Inquiry"));
         assert_eq!(bundle.sources.len(), 0);
     }
 
@@ -4546,6 +4553,8 @@ mod tests {
         assert!(out.contains("fixture://ipo-calendar"));
         assert!(out.contains("Relevance: event timing"));
         assert!(out.contains("Source-backed:"));
+        assert!(out.contains("Source-backed Research Inquiry"));
+        assert!(!out.contains("Research unavailable"));
     }
 
     #[test]
