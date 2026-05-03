@@ -103,8 +103,10 @@ evidence/source marker such as `리서치`, `근거`, `출처`, `왜`, `뉴스`,
 
 ### `mp research "question"` / `mp "question" --research`
 
-Research mode keeps the source-backed inquiry contract without
-making built-in network/news providers mandatory yet:
+Research mode has an explicit source contract: it is source-backed only when a
+provider bridge supplies source metadata. Without a configured provider it
+prints an unavailable/no-provider state and a reasoning scaffold instead of
+presenting the output as completed research.
 
 ```bash
 mp research "금리 하락이 성장주에 좋은 신호임?"
@@ -114,7 +116,7 @@ mp "대형 IPO 때문에 성장주가 강한 걸까?" --research
 Output includes:
 
 - provider/source metadata section
-- clear no-provider fallback when no live source is configured
+- clear `Research unavailable` / no-provider state when no live source is configured
 - distinction between source-backed material and inference scaffolding
 - evidence against / counter-view
 - data to check next
