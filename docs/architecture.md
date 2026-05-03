@@ -22,12 +22,12 @@ Codex/Claude adapters -> mp Rust binary -> quote + local inquiry/research lenses
 Initial code may keep these simple, but the boundaries should stay visible:
 
 - source hooks: quotes, RSS, macro data, filings
-- research provider hooks: noop fallback now, optional
+- research provider hooks: explicit no-provider/unavailable fallback now, optional
   `MARKET_PULSE_SEARCH_CMD` JSONL bridge, `adapters/search-command/` fixture
   kit, RSS/search/API providers later
 - lens hooks: risk-on/off, rates vs growth, dollar liquidity, Korea market, AI/semis, IPO/event, positioning/flow
 - inquiry hooks: question breakdown, possible explanations, evidence checks, counter-view, next better question
-- research inquiry hooks: source metadata, source-backed claims, no-source fallback, data-to-check prompts
+- research inquiry hooks: source metadata, source-backed claims, no-provider/unavailable fallback, data-to-check prompts
 - weekly hooks: current-local-week market story, current-week journal summary, next-week check questions
 - calendar hooks: local-date windows for today/yesterday/this-week/last-week and explicit review shortcuts
 - recall hooks: local journal full-text search, date/window filters, match snippets, recurring themes, next recall question
@@ -49,7 +49,7 @@ Planned or current adapters:
 
 ## Dependency stance
 
-The MVP intentionally avoids Rust crate dependencies. It uses the standard library plus a `curl` subprocess for quote fetches. Research mode proves the provider boundary with deterministic noop behavior and an opt-in external command bridge rather than making network providers mandatory. Add HTTP/JSON crates only when source reliability, parsing complexity, or provider abstraction becomes the actual bottleneck.
+The MVP intentionally avoids Rust crate dependencies. It uses the standard library plus a `curl` subprocess for quote fetches. Research mode proves the provider boundary with explicit no-provider/unavailable behavior and an opt-in external command bridge rather than making network providers mandatory. Add HTTP/JSON crates only when source reliability, parsing complexity, or provider abstraction becomes the actual bottleneck.
 
 `MARKET_PULSE_SEARCH_CMD` is a restricted bridge for local search tooling: the template must contain `{query}`, it is parsed into argv with simple quote-aware grouping, executed without a shell, capped by a 5 second timeout, and limited to the first 20 non-empty JSONL rows. JSON string escapes are decoded before rendering.
 
