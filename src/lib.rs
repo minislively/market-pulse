@@ -107,6 +107,43 @@ struct ResearchSource {
     evidence: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EarningsBucket {
+    Recent,
+    Upcoming,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EarningsFields {
+    ticker: Option<String>,
+    company: Option<String>,
+    report_date: Option<String>,
+    timing: Option<String>,
+    eps_actual: Option<String>,
+    eps_estimate: Option<String>,
+    revenue_actual: Option<String>,
+    revenue_estimate: Option<String>,
+    surprise: Option<String>,
+    guidance: Option<String>,
+    price_reaction: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct EarningsHint {
+    source: ResearchSource,
+    fields: EarningsFields,
+    freshness: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct EarningsBundle {
+    timestamp: String,
+    provider: String,
+    recent: Vec<EarningsHint>,
+    upcoming: Vec<EarningsHint>,
+    notes: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 struct ResearchBundle {
     provider: String,
@@ -213,6 +250,7 @@ enum CommandKind {
     Think,
     Review,
     Find,
+    Earnings,
     Help,
     Inquiry { text: String, no_save: bool },
     Research { text: String, no_save: bool },
@@ -272,6 +310,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         CommandKind::Think => think(&parsed.args),
         CommandKind::Review => review(&parsed.args),
         CommandKind::Find => find(&parsed.args),
+        CommandKind::Earnings => earnings(&parsed.args),
         CommandKind::Help => {
             print_help();
             Ok(())
@@ -298,6 +337,7 @@ fn parse_command_args(args: &[String]) -> Result<ParsedCommand, String> {
         Some("think") => Ok(parsed(CommandKind::Think, args)),
         Some("review") => Ok(parsed(CommandKind::Review, args)),
         Some("find") | Some("search") => Ok(parsed(CommandKind::Find, args)),
+        Some("earnings") => Ok(parsed(earnings_command(args)?, args)),
         Some("help") | Some("--help") | Some("-h") => Ok(parsed(CommandKind::Help, args)),
         Some("ask") => Ok(parsed(
             inquiry_command(&args[1..], "`mp ask` needs a question")?,
@@ -567,6 +607,26 @@ fn natural_tokens_and_flags(args: &[String], policy: FlagPolicy) -> (Vec<String>
     (tokens, passthrough)
 }
 
+fn earnings_command(args: &[String]) -> Result<CommandKind, String> {
+    for arg in args.iter().skip(1) {
+        match arg.as_str() {
+            "--no-save" => {}
+            "--save" => {
+                return Err("`mp earnings --save` is deferred in v1; earnings does not write journal events yet".into());
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown earnings option '{other}'"));
+            }
+            other => {
+                return Err(format!(
+                    "unexpected earnings argument '{other}'; use `mp earnings [--no-save]`"
+                ));
+            }
+        }
+    }
+    Ok(CommandKind::Earnings)
+}
+
 fn inquiry_command(args: &[String], empty_error: &str) -> Result<CommandKind, String> {
     let (text, no_save, research) = collect_question_args(args);
     if text.is_empty() {
@@ -600,10 +660,12 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
     (text, no_save, research)
 }
 
+fn help_text() -> &'static str {
+    "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp watch [--no-save]\n  mp fomo [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp earnings --no-save\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n\nNatural aliases:\n  mp 오늘 시황\n  mp NVDA\n  mp NVDA 리서치\n  mp 전에 금리 찾아줘 --limit 3\n  mp 이번주 복기"
+}
+
 fn print_help() {
-    println!(
-        "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp watch [--no-save]\n  mp fomo [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n\nNatural aliases:\n  mp 오늘 시황\n  mp NVDA\n  mp NVDA 리서치\n  mp 전에 금리 찾아줘 --limit 3\n  mp 이번주 복기"
-    );
+    println!("{}", help_text());
 }
 
 fn now(args: &[String]) -> Result<(), String> {
@@ -661,6 +723,13 @@ fn regime(args: &[String]) -> Result<(), String> {
 
 fn calendar(_args: &[String]) -> Result<(), String> {
     println!("{}", render_calendar());
+    Ok(())
+}
+
+fn earnings(args: &[String]) -> Result<(), String> {
+    earnings_command(args)?;
+    let bundle = build_earnings_bundle();
+    println!("{}", render_earnings(&bundle));
     Ok(())
 }
 
@@ -732,6 +801,183 @@ fn research_bundle_from_provider(
             sources: Vec::new(),
             notes: vec![format!("research provider failed gracefully: {err}")],
         })
+}
+
+const EARNINGS_FRESHNESS_DAYS: i64 = 14;
+const EARNINGS_RECENT_QUERY: &str =
+    "recent major US earnings results EPS revenue guidance stock reaction source";
+const EARNINGS_UPCOMING_QUERY: &str =
+    "upcoming major US earnings this week next week calendar radar source";
+
+trait EarningsProvider {
+    fn name(&self) -> &'static str;
+    fn earnings(&self) -> Result<EarningsBundle, String>;
+}
+
+struct NoopEarningsProvider;
+
+impl EarningsProvider for NoopEarningsProvider {
+    fn name(&self) -> &'static str {
+        "noop"
+    }
+
+    fn earnings(&self) -> Result<EarningsBundle, String> {
+        Ok(EarningsBundle {
+            timestamp: timestamp(),
+            provider: self.name().into(),
+            recent: Vec::new(),
+            upcoming: Vec::new(),
+            notes: vec![
+                "No built-in earnings database or paid API provider is configured.".into(),
+                "Configure MARKET_PULSE_SEARCH_CMD for source-backed earnings hints; until then this card is a reasoning scaffold only.".into(),
+            ],
+        })
+    }
+}
+
+struct SearchCommandEarningsProvider {
+    template: String,
+}
+
+impl EarningsProvider for SearchCommandEarningsProvider {
+    fn name(&self) -> &'static str {
+        "search-cmd"
+    }
+
+    fn earnings(&self) -> Result<EarningsBundle, String> {
+        let (recent, mut notes) =
+            self.fetch_bucket(EarningsBucket::Recent, EARNINGS_RECENT_QUERY)?;
+        let (upcoming, upcoming_notes) =
+            self.fetch_bucket(EarningsBucket::Upcoming, EARNINGS_UPCOMING_QUERY)?;
+        notes.extend(upcoming_notes);
+        notes.insert(
+            0,
+            "MARKET_PULSE_SEARCH_CMD supplied source metadata; optional structured earnings fields are rendered only when explicitly provided.".into(),
+        );
+        Ok(EarningsBundle {
+            timestamp: timestamp(),
+            provider: self.name().into(),
+            recent,
+            upcoming,
+            notes,
+        })
+    }
+}
+
+impl SearchCommandEarningsProvider {
+    fn fetch_bucket(
+        &self,
+        bucket: EarningsBucket,
+        query: &str,
+    ) -> Result<(Vec<EarningsHint>, Vec<String>), String> {
+        let args = search_command_args(&self.template, query)?;
+        let output = run_command_with_timeout(&args, Duration::from_secs(5))?;
+        if !output.status.success() {
+            return Err(format!(
+                "earnings search command exited with status {}",
+                output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let (rows, invalid_rows) = parse_earnings_jsonl(&stdout, 10);
+        let label = match bucket {
+            EarningsBucket::Recent => "recent-results",
+            EarningsBucket::Upcoming => "upcoming-radar",
+        };
+        let today = date_for_days_ago(0).ok();
+        let hints = rows
+            .into_iter()
+            .map(|(source, fields)| EarningsHint {
+                freshness: earnings_freshness_with_today(
+                    source.published_at.as_deref(),
+                    today.as_deref(),
+                ),
+                source,
+                fields,
+            })
+            .collect::<Vec<_>>();
+        let mut notes = vec![format!(
+            "{label}: query bucket fixed by command intent, not inferred from source prose."
+        )];
+        if invalid_rows > 0 {
+            notes.push(format!(
+                "{label}: {invalid_rows} invalid JSONL source row(s) skipped."
+            ));
+        }
+        if hints.is_empty() {
+            notes.push(format!("{label}: no valid source rows returned."));
+        }
+        Ok((hints, notes))
+    }
+}
+
+fn build_earnings_bundle() -> EarningsBundle {
+    match env::var("MARKET_PULSE_SEARCH_CMD") {
+        Ok(template) if !template.trim().is_empty() => {
+            let provider = SearchCommandEarningsProvider { template };
+            earnings_bundle_from_provider(&provider)
+        }
+        _ => earnings_bundle_from_provider(&NoopEarningsProvider),
+    }
+}
+
+fn earnings_bundle_from_provider(provider: &dyn EarningsProvider) -> EarningsBundle {
+    provider.earnings().unwrap_or_else(|err| EarningsBundle {
+        timestamp: timestamp(),
+        provider: provider.name().into(),
+        recent: Vec::new(),
+        upcoming: Vec::new(),
+        notes: vec![format!("earnings provider failed gracefully: {err}")],
+    })
+}
+
+fn earnings_freshness_with_today(published_at: Option<&str>, today: Option<&str>) -> &'static str {
+    let Some(published) = published_at.and_then(date_prefix) else {
+        return "unknown";
+    };
+    let Some(today) = today.and_then(date_prefix) else {
+        return "unknown";
+    };
+    let Some(age) = days_between(&published, &today) else {
+        return "unknown";
+    };
+    if age > EARNINGS_FRESHNESS_DAYS {
+        "stale"
+    } else {
+        "fresh"
+    }
+}
+
+fn date_prefix(value: &str) -> Option<String> {
+    let prefix = value.get(0..10)?;
+    validate_review_date(prefix).ok()?;
+    Some(prefix.to_string())
+}
+
+fn days_between(start: &str, end: &str) -> Option<i64> {
+    Some(date_to_day_number(end)? - date_to_day_number(start)?)
+}
+
+fn date_to_day_number(date: &str) -> Option<i64> {
+    validate_review_date(date).ok()?;
+    let year = date[0..4].parse::<i64>().ok()?;
+    let month = date[5..7].parse::<i64>().ok()?;
+    let day = date[8..10].parse::<i64>().ok()?;
+    Some(days_from_civil(year, month, day))
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - if month <= 2 { 1 } else { 0 };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let mp = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe
 }
 
 fn search_command_args(template: &str, query: &str) -> Result<Vec<String>, String> {
@@ -857,6 +1103,39 @@ fn parse_search_jsonl(text: &str, limit: usize) -> (Vec<ResearchSource>, usize) 
         }
     }
     (sources, invalid)
+}
+
+fn parse_earnings_jsonl(
+    text: &str,
+    limit: usize,
+) -> (Vec<(ResearchSource, EarningsFields)>, usize) {
+    let mut rows = Vec::new();
+    let mut invalid = 0;
+    for line in text.lines().filter(|l| !l.trim().is_empty()).take(limit) {
+        match earnings_source_from_json_line(line) {
+            Some(row) => rows.push(row),
+            None => invalid += 1,
+        }
+    }
+    (rows, invalid)
+}
+
+fn earnings_source_from_json_line(line: &str) -> Option<(ResearchSource, EarningsFields)> {
+    let source = research_source_from_json_line(line)?;
+    let fields = EarningsFields {
+        ticker: json_field(line, "ticker"),
+        company: json_field(line, "company"),
+        report_date: json_field(line, "report_date"),
+        timing: json_field(line, "timing"),
+        eps_actual: json_field(line, "eps_actual"),
+        eps_estimate: json_field(line, "eps_estimate"),
+        revenue_actual: json_field(line, "revenue_actual"),
+        revenue_estimate: json_field(line, "revenue_estimate"),
+        surprise: json_field(line, "surprise"),
+        guidance: json_field(line, "guidance"),
+        price_reaction: json_field(line, "price_reaction"),
+    };
+    Some((source, fields))
 }
 
 fn research_source_from_json_line(line: &str) -> Option<ResearchSource> {
@@ -2838,6 +3117,105 @@ fn question_seeds_for(p: &Pulse) -> Vec<String> {
     unique
 }
 
+fn render_earnings(bundle: &EarningsBundle) -> String {
+    let mut out = format!(
+        "Earnings Pulse · {} · provider: {}\n\n",
+        bundle.timestamp, bundle.provider
+    );
+    out.push_str("Recent results / source-backed hints\n");
+    render_earnings_hints(&mut out, &bundle.recent);
+    out.push_str("\nUpcoming radar / source-backed hints\n");
+    render_earnings_hints(&mut out, &bundle.upcoming);
+    out.push_str("\nEvidence checks\n");
+    out.push_str("  - Are revisions, guidance tone, and post-earnings reactions pointing in the same direction?\n");
+    out.push_str(
+        "  - Are semis/Nasdaq reactions broad, or concentrated in a few mega-cap names?\n",
+    );
+    out.push_str(
+        "  - Which upcoming reports could falsify the current growth/earnings narrative?\n",
+    );
+    out.push_str("\nCounter-view\n");
+    out.push_str("  - A source headline or one earnings beat may reflect positioning, guidance nuance, or single-name concentration rather than broad risk-on.\n");
+    if !bundle.notes.is_empty() {
+        out.push_str("\nSource notes\n");
+        for note in &bundle.notes {
+            out.push_str(&format!("  - {note}\n"));
+        }
+    }
+    out.push_str("\nBoundary\n  Reasoning support only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions. Experimental and incomplete: not an official filings or earnings database replacement.\n");
+    out
+}
+
+fn render_earnings_hints(out: &mut String, hints: &[EarningsHint]) {
+    if hints.is_empty() {
+        out.push_str("  - No source-backed earnings hints available; configure MARKET_PULSE_SEARCH_CMD or check official company/filing sources.\n");
+        return;
+    }
+    for (idx, hint) in hints.iter().enumerate() {
+        let source = &hint.source;
+        let published = source
+            .published_at
+            .as_deref()
+            .unwrap_or("published time unavailable");
+        out.push_str(&format!(
+            "  {}. {} — {} — {} — freshness: {}\n",
+            idx + 1,
+            source.title,
+            source.publisher,
+            published,
+            hint.freshness
+        ));
+        out.push_str(&format!("     URL: {}\n", empty_as_unknown(&source.url)));
+        if let Some(identity) = earnings_identity(&hint.fields) {
+            out.push_str(&format!("     Company: {identity}\n"));
+        }
+        out.push_str(&format!("     Evidence: {}\n", source.evidence));
+        out.push_str(&format!("     Relevance: {}\n", source.relevance));
+        out.push_str(&format!(
+            "     Report: date={} timing={} price_reaction={}\n",
+            opt_or_unknown(hint.fields.report_date.as_deref()),
+            opt_or_unknown(hint.fields.timing.as_deref()),
+            opt_or_unknown(hint.fields.price_reaction.as_deref())
+        ));
+        out.push_str(&format!(
+            "     EPS: actual={} estimate={} surprise={}\n",
+            opt_or_unknown(hint.fields.eps_actual.as_deref()),
+            opt_or_unknown(hint.fields.eps_estimate.as_deref()),
+            opt_or_unknown(hint.fields.surprise.as_deref())
+        ));
+        out.push_str(&format!(
+            "     Revenue: actual={} estimate={}\n",
+            opt_or_unknown(hint.fields.revenue_actual.as_deref()),
+            opt_or_unknown(hint.fields.revenue_estimate.as_deref())
+        ));
+        out.push_str(&format!(
+            "     Guidance: {}\n",
+            opt_or_unknown(hint.fields.guidance.as_deref())
+        ));
+    }
+}
+
+fn earnings_identity(fields: &EarningsFields) -> Option<String> {
+    match (fields.ticker.as_deref(), fields.company.as_deref()) {
+        (Some(ticker), Some(company)) => Some(format!("{ticker} · {company}")),
+        (Some(ticker), None) => Some(ticker.to_string()),
+        (None, Some(company)) => Some(company.to_string()),
+        (None, None) => None,
+    }
+}
+
+fn opt_or_unknown(value: Option<&str>) -> &str {
+    value.filter(|v| !v.trim().is_empty()).unwrap_or("unknown")
+}
+
+fn empty_as_unknown(value: &str) -> &str {
+    if value.trim().is_empty() {
+        "unknown"
+    } else {
+        value
+    }
+}
+
 fn render_inquiry(i: &Inquiry) -> String {
     let mut out = format!("Market Inquiry · {}\n\nQuestion breakdown\n", i.timestamp);
     for x in &i.breakdown {
@@ -4667,6 +5045,140 @@ mod tests {
     }
 
     #[test]
+    fn help_text_lists_earnings_command() {
+        assert!(help_text().contains("mp earnings --no-save"));
+    }
+
+    #[test]
+    fn routes_earnings_command_and_rejects_persistence() {
+        assert_eq!(
+            parse_command(&args(&["earnings"])).unwrap(),
+            CommandKind::Earnings
+        );
+        assert_eq!(
+            parse_command(&args(&["earnings", "--no-save"])).unwrap(),
+            CommandKind::Earnings
+        );
+        assert!(parse_command(&args(&["earnings", "--save"]))
+            .unwrap_err()
+            .contains("deferred in v1"));
+        assert!(parse_command(&args(&["earnings", "--bad"]))
+            .unwrap_err()
+            .contains("unknown earnings option"));
+    }
+
+    #[test]
+    fn earnings_no_provider_renders_safe_fallback() {
+        let bundle = earnings_bundle_from_provider(&NoopEarningsProvider);
+        let out = render_earnings(&bundle);
+        assert!(out.contains("Earnings Pulse"));
+        assert!(out.contains("No source-backed earnings hints available"));
+        assert!(out.contains("No built-in earnings database"));
+        assert!(out.contains("not investment advice"));
+        assert!(out.contains("not an official filings or earnings database replacement"));
+    }
+
+    #[test]
+    fn earnings_search_provider_buckets_by_query_origin() {
+        let provider = SearchCommandEarningsProvider {
+            template: "./adapters/search-command/fixture-jsonl {query}".into(),
+        };
+        let bundle = earnings_bundle_from_provider(&provider);
+        assert_eq!(bundle.provider, "search-cmd");
+        assert_eq!(bundle.recent.len(), 1);
+        assert_eq!(bundle.upcoming.len(), 1);
+        assert!(bundle.recent[0]
+            .source
+            .evidence
+            .contains("recent major US earnings results"));
+        assert!(bundle.upcoming[0]
+            .source
+            .evidence
+            .contains("upcoming major US earnings"));
+        assert!(bundle.notes.iter().any(|n| n.contains("recent-results")));
+        assert!(bundle.notes.iter().any(|n| n.contains("upcoming-radar")));
+        assert_eq!(bundle.recent[0].freshness, "unknown");
+    }
+
+    #[test]
+    fn earnings_render_does_not_infer_exact_fields_from_unstructured_sources() {
+        let bundle = EarningsBundle {
+            timestamp: "2026-04-28T00:00:00+0000".into(),
+            provider: "fixture".into(),
+            recent: vec![earnings_hint_fixture(Some("2026-04-28T01:00:00Z"), "fresh")],
+            upcoming: Vec::new(),
+            notes: vec!["fixture note".into()],
+        };
+        let out = render_earnings(&bundle);
+        assert!(out.contains("EPS: actual=unknown estimate=unknown surprise=unknown"));
+        assert!(out.contains("Revenue: actual=unknown estimate=unknown"));
+        assert!(out.contains("Guidance: unknown"));
+        assert!(out.contains("freshness: fresh"));
+        assert!(out.contains("Evidence: Fixture says EPS beat by $1 and revenue was huge"));
+    }
+
+    #[test]
+    fn earnings_render_uses_explicit_structured_fields() {
+        let line = r#"{"title":"Nvidia earnings","publisher":"fixture","url":"fixture://nvda","evidence":"structured row","relevance":"earnings","published_at":"2026-04-28","ticker":"NVDA","company":"Nvidia","report_date":"2026-05-20","timing":"after close","eps_actual":"1.23","eps_estimate":"1.10","revenue_actual":"10B","revenue_estimate":"9B","surprise":"beat","guidance":"raised","price_reaction":"+4%"}"#;
+        let (rows, invalid) = parse_earnings_jsonl(line, 10);
+        assert_eq!(invalid, 0);
+        let (source, fields) = rows.into_iter().next().unwrap();
+        let bundle = EarningsBundle {
+            timestamp: "2026-04-28T00:00:00+0000".into(),
+            provider: "fixture".into(),
+            recent: vec![EarningsHint {
+                source,
+                fields,
+                freshness: "fresh",
+            }],
+            upcoming: Vec::new(),
+            notes: Vec::new(),
+        };
+        let out = render_earnings(&bundle);
+        assert!(out.contains("Company: NVDA · Nvidia"));
+        assert!(out.contains("Report: date=2026-05-20 timing=after close price_reaction=+4%"));
+        assert!(out.contains("EPS: actual=1.23 estimate=1.10 surprise=beat"));
+        assert!(out.contains("Revenue: actual=10B estimate=9B"));
+        assert!(out.contains("Guidance: raised"));
+    }
+
+    #[test]
+    fn earnings_freshness_markers_are_deterministic() {
+        assert_eq!(
+            earnings_freshness_with_today(None, Some("2026-04-28")),
+            "unknown"
+        );
+        assert_eq!(
+            earnings_freshness_with_today(Some("fixture-time"), Some("2026-04-28")),
+            "unknown"
+        );
+        assert_eq!(
+            earnings_freshness_with_today(Some("2026-04-20"), Some("2026-04-28")),
+            "fresh"
+        );
+        assert_eq!(
+            earnings_freshness_with_today(Some("2026-04-28T01:00:00Z"), Some("2026-04-28")),
+            "fresh"
+        );
+        assert_eq!(
+            earnings_freshness_with_today(Some("2026-04-01"), Some("2026-04-28")),
+            "stale"
+        );
+    }
+
+    #[test]
+    fn earnings_search_provider_degrades_gracefully() {
+        let provider = SearchCommandEarningsProvider {
+            template: "/definitely/missing-market-pulse-search {query}".into(),
+        };
+        let bundle = earnings_bundle_from_provider(&provider);
+        assert_eq!(bundle.provider, "search-cmd");
+        assert!(bundle.recent.is_empty());
+        assert!(bundle.upcoming.is_empty());
+        assert!(bundle.notes.iter().any(|n| n.contains("failed gracefully")));
+    }
+
+    #[test]
     fn provider_error_degrades_gracefully() {
         struct ErrorProvider;
         impl ResearchProvider for ErrorProvider {
@@ -5923,6 +6435,21 @@ mod tests {
             drivers,
             tensions,
             notes: vec![],
+        }
+    }
+
+    fn earnings_hint_fixture(published_at: Option<&str>, freshness: &'static str) -> EarningsHint {
+        EarningsHint {
+            freshness,
+            fields: EarningsFields::default(),
+            source: ResearchSource {
+                title: "Fixture earnings source".into(),
+                publisher: "market-pulse fixture".into(),
+                url: "fixture://earnings".into(),
+                published_at: published_at.map(str::to_string),
+                relevance: "earnings evidence".into(),
+                evidence: "Fixture says EPS beat by $1 and revenue was huge".into(),
+            },
         }
     }
 

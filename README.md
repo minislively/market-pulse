@@ -20,6 +20,7 @@ mp fomo
 mp week
 mp calendar
 mp regime
+mp earnings --no-save
 mp think "금리가 부담인데도 반도체가 버티는 걸 보면 성장 기대가 아직 남아있는 것 같다"
 mp review
 mp review --date 2026-04-21
@@ -162,6 +163,42 @@ parsing, `{query}` substitution, 5 second timeout, and at most 20 JSONL source
 rows. JSON string escapes such as `\"`, `\n`, and `\u2713` are decoded. If the
 command fails, `mp` falls back to the normal inference scaffold instead of
 crashing.
+
+### `mp earnings`
+
+Experimental US earnings-season card:
+
+```bash
+mp earnings --no-save
+MARKET_PULSE_SEARCH_CMD='./adapters/search-command/fixture-jsonl {query}' \
+  mp earnings --no-save
+MARKET_PULSE_SEARCH_CMD='./adapters/earnings-command/fixture-jsonl {query}' \
+  mp earnings --no-save
+MARKET_PULSE_SEARCH_CMD='./adapters/earnings-command/yahoo-jsonl --fixture {query}' \
+  mp earnings --no-save
+MARKET_PULSE_SEARCH_CMD='./adapters/earnings-command/yahoo-jsonl {query}' \
+  mp earnings --no-save
+```
+
+`mp earnings` uses the same source-optional bridge style as research mode. It
+issues separate source queries for recent major US earnings results and upcoming
+earnings radar, then renders source-backed hints with freshness markers. It is
+not an official filings database, not a complete US-market earnings calendar,
+and not a replacement for company IR/SEC/Nasdaq verification.
+
+`adapters/earnings-command/yahoo-jsonl --fixture` is zero-network and
+deterministic for smoke tests. Live `yahoo-jsonl` is an unofficial, key-free,
+best-effort Yahoo Finance page adapter: it may return sparse page-level evidence
+or skip when Yahoo is unavailable / the page shape changes. Treat it as an
+opt-in source hint only, never as a complete calendar or trading signal.
+
+V1 deliberately avoids false precision: EPS, revenue, guidance, report date, and
+timing remain `unknown` / `not available` unless an adapter explicitly supplies
+optional typed earnings fields. Unstructured search result titles or evidence
+snippets are shown as source context, not parsed into exact earnings facts. See
+`adapters/earnings-command/README.md` for the structured JSONL contract. Journal
+persistence is deferred; `--save` returns an error and default / `--no-save` do
+not write journal events.
 
 ### `mp now`
 

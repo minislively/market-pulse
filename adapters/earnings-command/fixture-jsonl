@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+query=${*:-"fixture earnings query"}
+
+json_escape() {
+  awk 'BEGIN {
+    s = ARGV[1]
+    ARGV[1] = ""
+    gsub(/\\/, "\\\\", s)
+    gsub(/"/, "\\\"", s)
+    gsub(/\t/, "\\t", s)
+    gsub(/\r/, "\\r", s)
+    gsub(/\n/, "\\n", s)
+    printf "%s", s
+  }' "$1"
+}
+
+evidence=$(json_escape "Structured fixture source row for query: $query")
+
+printf '%s%s%s\n' \
+  '{"title":"Fixture structured earnings source","publisher":"market-pulse fixture","url":"fixture://earnings-command/demo","evidence":"' \
+  "$evidence" \
+  '","relevance":"Demonstrates optional typed earnings fields","published_at":"2026-04-28","ticker":"NVDA","company":"Nvidia","report_date":"2026-05-20","timing":"after close","eps_actual":"1.23","eps_estimate":"1.10","revenue_actual":"10B","revenue_estimate":"9B","surprise":"beat","guidance":"raised","price_reaction":"+4%"}'

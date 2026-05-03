@@ -1,0 +1,172 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'date'
+require 'json'
+require 'net/http'
+require 'openssl'
+require 'time'
+require 'uri'
+
+OPEN_TIMEOUT_SECONDS = 1
+READ_TIMEOUT_SECONDS = 2
+YAHOO_EARNINGS_URL = 'https://finance.yahoo.com/calendar/earnings'
+
+USAGE = <<~TEXT
+  Usage:
+    ./adapters/earnings-command/yahoo-jsonl --fixture <query>
+    ./adapters/earnings-command/yahoo-jsonl <query>
+
+  Emits JSON Lines source metadata rows for MARKET_PULSE_SEARCH_CMD / mp earnings.
+  --fixture is deterministic and performs no network calls.
+  Live mode is an unofficial, best-effort Yahoo Finance page adapter. It is not a
+  complete earnings calendar and emits no trading advice.
+
+  Exit codes:
+    0 success, including zero-row success
+    1 usage error or local adapter bug
+    2 live source skipped/unavailable
+TEXT
+
+def fail_with(message, code = 1)
+  warn "yahoo-jsonl: #{message}"
+  exit code
+end
+
+def first_string(*values)
+  values.flatten.compact.map(&:to_s).find { |value| !value.strip.empty? }&.strip
+end
+
+def json_row(row)
+  puts JSON.generate(row)
+end
+
+def query_kind(query)
+  q = query.downcase
+  return 'recent' if q.match?(/recent|result|reported|actual|reaction|지난|최근/)
+  return 'upcoming' if q.match?(/upcoming|calendar|this week|next week|radar|예정|다가/)
+
+  'earnings'
+end
+
+def fixture_row(query)
+  kind = query_kind(query)
+  if kind == 'recent'
+    {
+      'title' => 'Yahoo fixture recent earnings page row',
+      'publisher' => 'market-pulse yahoo fixture',
+      'url' => 'fixture://earnings-command/yahoo/recent',
+      'evidence' => "Deterministic Yahoo earnings fixture for query: #{query}",
+      'relevance' => 'Fixture recent earnings source-backed hint; not live market data',
+      'published_at' => '2026-04-28',
+      'ticker' => 'MSFT',
+      'company' => 'Microsoft',
+      'report_date' => '2026-04-27',
+      'timing' => 'after close'
+    }
+  else
+    {
+      'title' => 'Yahoo fixture upcoming earnings calendar row',
+      'publisher' => 'market-pulse yahoo fixture',
+      'url' => 'fixture://earnings-command/yahoo/upcoming',
+      'evidence' => "Deterministic Yahoo earnings fixture for query: #{query}",
+      'relevance' => 'Fixture upcoming earnings calendar hint; not live market data',
+      'published_at' => '2026-04-28',
+      'ticker' => 'AAPL',
+      'company' => 'Apple',
+      'report_date' => '2026-05-01',
+      'timing' => 'after close'
+    }
+  end
+end
+
+def html_title(html)
+  match = html.match(%r{<title[^>]*>(.*?)</title>}im)
+  return nil unless match
+
+  match[1].gsub(/\s+/, ' ').gsub(/&amp;/, '&').strip
+end
+
+def evidence_from(html, query)
+  title = html_title(html)
+  earnings_mentions = html.scan(/earnings/i).length
+  calendar_mentions = html.scan(/calendar/i).length
+  first_string(
+    title && "#{title}; query=#{query}; earnings_mentions=#{earnings_mentions}; calendar_mentions=#{calendar_mentions}",
+    "Yahoo Finance earnings calendar page fetched for query: #{query}"
+  )
+end
+
+def yahoo_url(query)
+  today = Time.now.utc.to_date
+  if query_kind(query) == 'recent'
+    from = (today - 7).strftime('%Y-%m-%d')
+    to = today.strftime('%Y-%m-%d')
+  else
+    from = today.strftime('%Y-%m-%d')
+    to = (today + 14).strftime('%Y-%m-%d')
+  end
+  uri = URI(YAHOO_EARNINGS_URL)
+  uri.query = URI.encode_www_form('from' => from, 'to' => to)
+  uri.to_s
+end
+
+def fetch_yahoo(query)
+  uri = URI(yahoo_url(query))
+  http = Net::HTTP.new(uri.host, uri.port)
+  http.use_ssl = true
+  http.open_timeout = OPEN_TIMEOUT_SECONDS
+  http.read_timeout = READ_TIMEOUT_SECONDS
+
+  request = Net::HTTP::Get.new(uri)
+  request['User-Agent'] = 'market-pulse-yahoo-jsonl/0.1 (+https://finance.yahoo.com/calendar/earnings)'
+  request['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+
+  response = http.request(request)
+  unless response.is_a?(Net::HTTPSuccess)
+    fail_with("Yahoo Finance earnings page unavailable: HTTP #{response.code}", 2)
+  end
+
+  body = response.body.to_s
+  unless body.match?(/Yahoo/i) && body.match?(/earnings/i)
+    fail_with('Yahoo Finance response did not contain earnings calendar markers', 2)
+  end
+
+  body
+rescue Timeout::Error, Errno::ECONNREFUSED, Errno::ECONNRESET, SocketError, OpenSSL::SSL::SSLError => e
+  fail_with("Yahoo Finance request skipped/unavailable: #{e.class}", 2)
+end
+
+def live_row(query)
+  html = fetch_yahoo(query)
+  url = yahoo_url(query)
+  title = html_title(html) || 'Yahoo Finance earnings calendar'
+  {
+    'title' => title,
+    'publisher' => 'Yahoo Finance',
+    'url' => url,
+    'evidence' => evidence_from(html, query),
+    'relevance' => 'Unofficial best-effort Yahoo Finance earnings calendar page source; incomplete and not trading advice'
+  }
+end
+
+fixture = false
+args = []
+
+ARGV.each do |arg|
+  case arg
+  when '--fixture'
+    fixture = true
+  when '--help', '-h'
+    puts USAGE
+    exit 0
+  else
+    args << arg
+  end
+end
+
+query = args.join(' ').strip
+fail_with('query is required', 1) if query.empty?
+
+row = fixture ? fixture_row(query) : live_row(query)
+json_row(row)
