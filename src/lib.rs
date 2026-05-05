@@ -78,6 +78,37 @@ struct Weekly {
 }
 
 #[derive(Clone, Debug)]
+struct LeadershipAsset {
+    symbol: &'static str,
+    label: &'static str,
+    unit: &'static str,
+    value: Option<f64>,
+    five_day: Option<f64>,
+    twenty_day: Option<f64>,
+    note: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct LeadershipCheck {
+    name: &'static str,
+    five_day: Option<f64>,
+    twenty_day: Option<f64>,
+    posture: String,
+}
+
+#[derive(Clone, Debug)]
+struct Leadership {
+    timestamp: String,
+    basis: Vec<String>,
+    label: String,
+    assets: Vec<LeadershipAsset>,
+    checks: Vec<LeadershipCheck>,
+    evidence: Vec<String>,
+    falsifiers: Vec<String>,
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 struct Inquiry {
     timestamp: String,
     question: String,
@@ -247,6 +278,7 @@ enum CommandKind {
     Week,
     Calendar,
     Regime,
+    Leadership,
     Think,
     Review,
     Find,
@@ -274,6 +306,13 @@ const REGIME_QUOTE_BASIS: &[&str] = &[
     "window: Yahoo chart range=3mo interval=1wk; this is a 1-3 month regime read, not a trading signal",
 ];
 
+const LEADERSHIP_QUOTE_BASIS: &[&str] = &[
+    "time: local machine timestamp; leadership is an intermediate read between mp now and mp regime",
+    "5D change: latest Yahoo daily close value vs prior daily close; regularMarketPrice is fallback only",
+    "20D change: latest Yahoo daily close value vs first available close from range=1mo interval=1d; approximate trading-month lens",
+    "relative checks compare percentage changes, not valuation, earnings, breadth internals, or portfolio signals",
+];
+
 const SYMBOLS: &[(&str, &str, &str)] = &[
     ("^GSPC", "S&P 500", ""),
     ("^IXIC", "Nasdaq", ""),
@@ -287,6 +326,17 @@ const SYMBOLS: &[(&str, &str, &str)] = &[
 ];
 
 const PULSE_ONLY_SYMBOLS: &[(&str, &str, &str)] = &[("^SOX", "Semis", "")];
+
+const LEADERSHIP_SYMBOLS: &[(&str, &str, &str)] = &[
+    ("QQQ", "QQQ", "USD"),
+    ("SPY", "SPY", "USD"),
+    ("^SOX", "Semis", ""),
+    ("IWM", "IWM", "USD"),
+    ("BTC-USD", "BTC", "USD"),
+    ("^KS11", "KOSPI", ""),
+    ("DX-Y.NYB", "DXY", ""),
+    ("^TNX", "US 10Y", "%"),
+];
 
 const FOMO_JOURNAL_PROMPT: &str =
     "Run `mp think` with one claim, one confirming signal, and one falsifier.";
@@ -307,6 +357,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         CommandKind::Week => week(&parsed.args),
         CommandKind::Calendar => calendar(&parsed.args),
         CommandKind::Regime => regime(&parsed.args),
+        CommandKind::Leadership => leadership(&parsed.args),
         CommandKind::Think => think(&parsed.args),
         CommandKind::Review => review(&parsed.args),
         CommandKind::Find => find(&parsed.args),
@@ -334,6 +385,9 @@ fn parse_command_args(args: &[String]) -> Result<ParsedCommand, String> {
         Some("week") | Some("weekly") => Ok(parsed(CommandKind::Week, args)),
         Some("calendar") | Some("cal") => Ok(parsed(CommandKind::Calendar, args)),
         Some("regime") => Ok(parsed(CommandKind::Regime, args)),
+        Some("leadership") | Some("leader") | Some("trend") => {
+            Ok(parsed(CommandKind::Leadership, args))
+        }
         Some("think") => Ok(parsed(CommandKind::Think, args)),
         Some("review") => Ok(parsed(CommandKind::Review, args)),
         Some("find") | Some("search") => Ok(parsed(CommandKind::Find, args)),
@@ -387,6 +441,9 @@ fn natural_command(args: &[String]) -> Option<Result<ParsedCommand, String>> {
         return Some(
             research_command(args, "`mp` needs a market question").map(|kind| parsed(kind, args)),
         );
+    }
+    if is_natural_leadership(args) {
+        return Some(Ok(parsed(CommandKind::Leadership, args)));
     }
     if is_natural_now(args) {
         return Some(Ok(parsed(CommandKind::Now, args)));
@@ -549,6 +606,28 @@ fn is_natural_regime(args: &[String]) -> bool {
             .any(|token| token.contains("큰") || token.contains("중기")))
 }
 
+fn is_natural_leadership(args: &[String]) -> bool {
+    let (tokens, _) = natural_tokens_and_flags(args, FlagPolicy::TextOnly);
+    let leadership_word = tokens.iter().any(|token| {
+        token.contains("리더십")
+            || token.contains("주도")
+            || token.contains("추세")
+            || token.contains("쏠림")
+            || token.contains("건강")
+            || token.contains("leadership")
+            || token.contains("trend")
+    });
+    let market_word = tokens.iter().any(|token| {
+        token.contains("시장")
+            || token.contains("장")
+            || token.contains("성장")
+            || token.contains("반도체")
+            || token.contains("semis")
+            || token.contains("growth")
+    });
+    leadership_word && market_word
+}
+
 fn is_natural_calendar(args: &[String]) -> bool {
     let (tokens, _) = natural_tokens_and_flags(args, FlagPolicy::TextOnly);
     tokens.iter().any(|token| token.contains("캘린더"))
@@ -661,7 +740,7 @@ fn collect_question_args(args: &[String]) -> (String, bool, bool) {
 }
 
 fn help_text() -> &'static str {
-    "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp watch [--no-save]\n  mp fomo [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp earnings --no-save\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n\nNatural aliases:\n  mp 오늘 시황\n  mp NVDA\n  mp NVDA 리서치\n  mp 전에 금리 찾아줘 --limit 3\n  mp 이번주 복기"
+    "Usage:\n  mp \"your market question\" [--no-save]\n  mp \"your market question\" --research [--no-save]\n  mp ask <your market question> [--no-save]\n  mp research <your market question> [--no-save]\n  mp now [--compact] [--no-save]\n  mp watch [--no-save]\n  mp fomo [--no-save]\n  mp week [--no-save]\n  mp calendar\n  mp regime [--no-save]\n  mp leadership [--no-save]  (alias: mp trend)\n  mp earnings --no-save\n  mp think <your market interpretation> [--no-save]\n  mp review [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n  mp find <query> [--limit N] [--date YYYY-MM-DD|--days N|--today|--yesterday|--this-week|--last-week]\n\nNatural aliases:\n  mp 오늘 시황\n  mp NVDA\n  mp NVDA 리서치\n  mp 전에 금리 찾아줘 --limit 3\n  mp 이번주 복기"
 }
 
 fn print_help() {
@@ -718,6 +797,16 @@ fn regime(args: &[String]) -> Result<(), String> {
         append_event(&regime_json(&regime))?;
     }
     println!("{}", render_regime(&regime));
+    Ok(())
+}
+
+fn leadership(args: &[String]) -> Result<(), String> {
+    let no_save = args.iter().any(|a| a == "--no-save");
+    let leadership = build_leadership();
+    if !no_save {
+        append_event(&leadership_json(&leadership))?;
+    }
+    println!("{}", render_leadership(&leadership));
     Ok(())
 }
 
@@ -1591,6 +1680,292 @@ fn build_regime() -> Regime {
         question,
         notes,
     }
+}
+
+fn build_leadership() -> Leadership {
+    let mut assets = Vec::new();
+    let mut failures = 0;
+    for &(symbol, label, unit) in LEADERSHIP_SYMBOLS {
+        let five = fetch_asset_window(
+            symbol,
+            label,
+            unit,
+            "5d",
+            "1d",
+            WindowChange::PriorDailyClose,
+        );
+        let twenty = fetch_asset_window(symbol, label, unit, "1mo", "1d", WindowChange::FirstClose);
+        let note = match (&five, &twenty) {
+            (Err(_), Err(_)) => {
+                failures += 1;
+                Some("leadership data unavailable".into())
+            }
+            (Err(_), Ok(_)) => {
+                failures += 1;
+                Some("5D data unavailable".into())
+            }
+            (Ok(_), Err(_)) => {
+                failures += 1;
+                Some("20D data unavailable".into())
+            }
+            (Ok(_), Ok(_)) => None,
+        };
+        assets.push(LeadershipAsset {
+            symbol,
+            label,
+            unit,
+            value: five
+                .as_ref()
+                .ok()
+                .and_then(|a| a.value)
+                .or_else(|| twenty.as_ref().ok().and_then(|a| a.value)),
+            five_day: five.as_ref().ok().and_then(|a| a.change),
+            twenty_day: twenty.as_ref().ok().and_then(|a| a.change),
+            note,
+        });
+    }
+    compose_leadership(assets, failures)
+}
+
+fn compose_leadership(assets: Vec<LeadershipAsset>, failures: usize) -> Leadership {
+    let checks = leadership_checks(&assets);
+    let label = infer_leadership_label(&checks, &assets);
+    let evidence = infer_leadership_evidence(&label, &checks, &assets);
+    let falsifiers = infer_leadership_falsifiers(&label, &checks, &assets);
+    let mut notes = vec![
+        "market quotes from Yahoo Finance chart endpoint via curl".to_string(),
+        "leadership read is a thinking scaffold, not a trade signal".to_string(),
+    ];
+    if failures > 0 {
+        notes.push(format!(
+            "{failures} leadership quote window(s) unavailable; read is partial"
+        ));
+    }
+    Leadership {
+        timestamp: timestamp(),
+        basis: LEADERSHIP_QUOTE_BASIS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        label,
+        assets,
+        checks,
+        evidence,
+        falsifiers,
+        notes,
+    }
+}
+
+fn leadership_checks(assets: &[LeadershipAsset]) -> Vec<LeadershipCheck> {
+    vec![
+        relative_leadership_check("QQQ vs SPY", assets, "QQQ", "SPY", "growth vs broad market"),
+        relative_leadership_check(
+            "Semis vs QQQ",
+            assets,
+            "^SOX",
+            "QQQ",
+            "AI/semis concentration",
+        ),
+        relative_leadership_check(
+            "IWM vs SPY",
+            assets,
+            "IWM",
+            "SPY",
+            "breadth / small-cap confirmation",
+        ),
+        absolute_leadership_check("BTC", assets, "BTC-USD", "high-beta liquidity proxy", false),
+        absolute_leadership_check(
+            "KOSPI",
+            assets,
+            "^KS11",
+            "Korea/global risk confirmation",
+            false,
+        ),
+        absolute_leadership_check("DXY", assets, "DX-Y.NYB", "dollar pressure", true),
+        absolute_leadership_check("US 10Y", assets, "^TNX", "rates pressure", true),
+    ]
+}
+
+fn relative_leadership_check(
+    name: &'static str,
+    assets: &[LeadershipAsset],
+    leader: &str,
+    base: &str,
+    lens: &str,
+) -> LeadershipCheck {
+    let five_day = leadership_change(assets, leader, true)
+        .zip(leadership_change(assets, base, true))
+        .map(|(a, b)| a - b);
+    let twenty_day = leadership_change(assets, leader, false)
+        .zip(leadership_change(assets, base, false))
+        .map(|(a, b)| a - b);
+    let posture = match twenty_day.or(five_day) {
+        Some(v) if v > 0.75 => format!("{lens}: confirming"),
+        Some(v) if v < -0.75 => format!("{lens}: lagging"),
+        Some(_) => format!("{lens}: neutral"),
+        None => format!("{lens}: unavailable"),
+    };
+    LeadershipCheck {
+        name,
+        five_day,
+        twenty_day,
+        posture,
+    }
+}
+
+fn absolute_leadership_check(
+    name: &'static str,
+    assets: &[LeadershipAsset],
+    symbol: &str,
+    lens: &str,
+    pressure_when_positive: bool,
+) -> LeadershipCheck {
+    let five_day = leadership_change(assets, symbol, true);
+    let twenty_day = leadership_change(assets, symbol, false);
+    let value = twenty_day.or(five_day);
+    let posture = match value {
+        Some(v) if pressure_when_positive && v > 0.75 => format!("{lens}: pressure rising"),
+        Some(v) if pressure_when_positive && v < -0.75 => format!("{lens}: pressure easing"),
+        Some(v) if !pressure_when_positive && v > 1.0 => format!("{lens}: confirming"),
+        Some(v) if !pressure_when_positive && v < -1.0 => format!("{lens}: lagging"),
+        Some(_) => format!("{lens}: neutral"),
+        None => format!("{lens}: unavailable"),
+    };
+    LeadershipCheck {
+        name,
+        five_day,
+        twenty_day,
+        posture,
+    }
+}
+
+fn leadership_change(assets: &[LeadershipAsset], symbol: &str, five_day: bool) -> Option<f64> {
+    assets.iter().find(|a| a.symbol == symbol).and_then(|a| {
+        if five_day {
+            a.five_day
+        } else {
+            a.twenty_day
+        }
+    })
+}
+
+fn leadership_check_value(checks: &[LeadershipCheck], name: &str, twenty_day: bool) -> Option<f64> {
+    checks.iter().find(|c| c.name == name).and_then(|c| {
+        if twenty_day {
+            c.twenty_day
+        } else {
+            c.five_day
+        }
+    })
+}
+
+fn leadership_positive(checks: &[LeadershipCheck], name: &str, threshold: f64) -> bool {
+    leadership_check_value(checks, name, true)
+        .or_else(|| leadership_check_value(checks, name, false))
+        .is_some_and(|v| v > threshold)
+}
+
+fn infer_leadership_label(checks: &[LeadershipCheck], assets: &[LeadershipAsset]) -> String {
+    let growth = leadership_positive(checks, "QQQ vs SPY", 0.3);
+    let semis = leadership_positive(checks, "Semis vs QQQ", 0.75);
+    let breadth = leadership_check_value(checks, "IWM vs SPY", true)
+        .or_else(|| leadership_check_value(checks, "IWM vs SPY", false))
+        .is_some_and(|v| v > -0.5);
+    let risk_confirm = leadership_change(assets, "BTC-USD", false)
+        .or_else(|| leadership_change(assets, "BTC-USD", true))
+        .is_some_and(|v| v > 0.0)
+        || leadership_change(assets, "^KS11", false)
+            .or_else(|| leadership_change(assets, "^KS11", true))
+            .is_some_and(|v| v > 0.0);
+    let macro_pressure = leadership_change(assets, "DX-Y.NYB", false)
+        .or_else(|| leadership_change(assets, "DX-Y.NYB", true))
+        .is_some_and(|v| v > 0.75)
+        || leadership_change(assets, "^TNX", false)
+            .or_else(|| leadership_change(assets, "^TNX", true))
+            .is_some_and(|v| v > 1.5);
+
+    if semis && (!breadth || !risk_confirm) {
+        "Crowded semis chase"
+    } else if growth && breadth && risk_confirm && !macro_pressure {
+        "Healthy growth leadership"
+    } else {
+        "Mixed / fragile leadership"
+    }
+    .into()
+}
+
+fn infer_leadership_evidence(
+    label: &str,
+    checks: &[LeadershipCheck],
+    assets: &[LeadershipAsset],
+) -> Vec<String> {
+    let mut evidence = Vec::new();
+    if leadership_positive(checks, "QQQ vs SPY", 0.3) {
+        evidence.push("QQQ is leading SPY, so growth is stronger than the broad index.".into());
+    }
+    if leadership_positive(checks, "Semis vs QQQ", 0.75) {
+        evidence.push("Semis are leading QQQ, so AI/semis leadership is active.".into());
+    }
+    if leadership_check_value(checks, "IWM vs SPY", true)
+        .or_else(|| leadership_check_value(checks, "IWM vs SPY", false))
+        .is_some_and(|v| v > -0.5)
+    {
+        evidence.push(
+            "IWM is not badly lagging SPY, so breadth is not clearly rejecting the move.".into(),
+        );
+    }
+    if leadership_change(assets, "BTC-USD", false)
+        .or_else(|| leadership_change(assets, "BTC-USD", true))
+        .is_some_and(|v| v > 0.0)
+        || leadership_change(assets, "^KS11", false)
+            .or_else(|| leadership_change(assets, "^KS11", true))
+            .is_some_and(|v| v > 0.0)
+    {
+        evidence.push(
+            "BTC or KOSPI is confirming some risk appetite outside US megacap growth.".into(),
+        );
+    }
+    if label.contains("Crowded") {
+        evidence.push(
+            "The key question is whether semis leadership is being confirmed beyond semis.".into(),
+        );
+    }
+    if evidence.is_empty() || label.contains("Mixed") {
+        evidence.push(
+            "Signals are split; no single healthy-growth story has enough confirmation yet.".into(),
+        );
+    }
+    evidence.truncate(4);
+    evidence
+}
+
+fn infer_leadership_falsifiers(
+    label: &str,
+    _checks: &[LeadershipCheck],
+    _assets: &[LeadershipAsset],
+) -> Vec<String> {
+    let mut falsifiers = match label {
+        "Healthy growth leadership" => vec![
+            "QQQ losing SPY leadership while semis also fade would weaken the healthy-growth read.".into(),
+            "DXY or US 10Y rising while growth stops absorbing the pressure would turn this fragile.".into(),
+            "IWM/SPY and KOSPI both lagging would question breadth/global confirmation.".into(),
+        ],
+        "Crowded semis chase" => vec![
+            "IWM/SPY, BTC, and KOSPI joining the move would make it less crowded and more broadly risk-on.".into(),
+            "Semis losing QQQ leadership would remove the main support for the crowded-semis label.".into(),
+            "QQQ beating SPY without semis concentration would shift the read toward healthier growth leadership.".into(),
+        ],
+        _ => vec![
+            "QQQ/SPY, Semis/QQQ, and IWM/SPY aligning positively would upgrade the read.".into(),
+            "DXY and US 10Y pressure rising while QQQ/SPY rolls over would downgrade the read.".into(),
+            "BTC and KOSPI confirming or rejecting together would clarify whether risk appetite is real.".into(),
+        ],
+    };
+    falsifiers.push(
+        "Do not infer market health from one day alone; re-check the 5D and 20D windows.".into(),
+    );
+    falsifiers.truncate(4);
+    falsifiers
 }
 
 #[derive(Clone, Debug)]
@@ -2924,6 +3299,79 @@ fn render_fomo_checkpoint(checkpoint: &FomoCheckpoint) -> String {
         checkpoint.prompt
     ));
     out
+}
+
+fn render_leadership(l: &Leadership) -> String {
+    let mut out = format!(
+        "Market Leadership · {}\n\nTentative read\n  {}\n\nBasis\n",
+        l.timestamp, l.label
+    );
+    for b in &l.basis {
+        out.push_str(&format!("  - {b}\n"));
+    }
+    out.push_str("\n5D / 20D Leadership Checks\n");
+    for c in &l.checks {
+        out.push_str(&format!(
+            "  - {}: {} / {} · {}\n",
+            c.name,
+            fmt_optional_pct(c.five_day),
+            fmt_optional_pct(c.twenty_day),
+            c.posture
+        ));
+    }
+    out.push_str("\nAsset windows\n");
+    for a in &l.assets {
+        let value = a
+            .value
+            .map(|v| {
+                format!(
+                    "{v:.2}{}",
+                    if a.unit.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(" {}", a.unit)
+                    }
+                )
+            })
+            .unwrap_or_else(|| "n/a".into());
+        let note = a
+            .note
+            .as_ref()
+            .map(|n| format!(" · {n}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  - {}: {} (5D {}, 20D {}){}\n",
+            a.label,
+            value,
+            fmt_optional_pct(a.five_day),
+            fmt_optional_pct(a.twenty_day),
+            note
+        ));
+    }
+    out.push_str("\nEvidence\n");
+    for e in &l.evidence {
+        out.push_str(&format!("  - {e}\n"));
+    }
+    out.push_str("\nFalsifier / watch\n");
+    for f in &l.falsifiers {
+        out.push_str(&format!("  - {f}\n"));
+    }
+    out.push_str(
+        "\nBoundary\n  Market literacy only; not investment advice, buy/sell guidance, price targets, stop-loss, or portfolio instructions.\n",
+    );
+    if !l.notes.is_empty() {
+        out.push_str("\nSource notes\n");
+        for n in &l.notes {
+            out.push_str(&format!("  - {n}\n"));
+        }
+    }
+    out
+}
+
+fn fmt_optional_pct(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:+.2}%"))
+        .unwrap_or_else(|| "n/a".into())
 }
 
 fn render_regime(r: &Regime) -> String {
@@ -4364,6 +4812,15 @@ fn fomo_check_json(checkpoint: &FomoCheckpoint) -> String {
     )
 }
 
+fn leadership_json(l: &Leadership) -> String {
+    format!(
+        "{{\"type\":\"leadership\",\"timestamp\":\"{}\",\"basis\":\"{}\",\"label\":\"{}\"}}",
+        esc(&l.timestamp),
+        esc(&l.basis.join(" | ")),
+        esc(&l.label)
+    )
+}
+
 fn regime_json(r: &Regime) -> String {
     format!(
         "{{\"type\":\"regime\",\"timestamp\":\"{}\",\"basis\":\"{}\",\"label\":\"{}\",\"question\":\"{}\"}}",
@@ -4513,6 +4970,28 @@ mod tests {
             parse_command(&["regime".into(), "--no-save".into()]).unwrap(),
             CommandKind::Regime
         );
+    }
+
+    #[test]
+    fn routes_leadership_and_trend_commands() {
+        assert_eq!(
+            parse_command(&["leadership".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Leadership
+        );
+        assert_eq!(
+            parse_command(&["trend".into(), "--no-save".into()]).unwrap(),
+            CommandKind::Leadership
+        );
+        assert_eq!(
+            parse_command(&args(&["시장", "리더십", "체크"])).unwrap(),
+            CommandKind::Leadership
+        );
+    }
+
+    #[test]
+    fn help_text_lists_leadership_command() {
+        assert!(help_text().contains("mp leadership [--no-save]"));
+        assert!(help_text().contains("alias: mp trend"));
     }
 
     #[test]
@@ -6397,6 +6876,75 @@ mod tests {
             tensions,
             notes: vec![],
         }
+    }
+
+    #[test]
+    fn leadership_labels_and_rendering_are_deterministic() {
+        let healthy = compose_test_leadership(vec![
+            leadership_asset("QQQ", "QQQ", Some(1.0), Some(4.0)),
+            leadership_asset("SPY", "SPY", Some(0.2), Some(1.0)),
+            leadership_asset("^SOX", "Semis", Some(1.4), Some(5.0)),
+            leadership_asset("IWM", "IWM", Some(0.1), Some(0.8)),
+            leadership_asset("BTC-USD", "BTC", Some(2.0), Some(6.0)),
+            leadership_asset("^KS11", "KOSPI", Some(0.5), Some(1.0)),
+            leadership_asset("DX-Y.NYB", "DXY", Some(-0.1), Some(-0.5)),
+            leadership_asset("^TNX", "US 10Y", Some(0.1), Some(0.2)),
+        ]);
+        assert_eq!(healthy.label, "Healthy growth leadership");
+        let rendered = render_leadership(&healthy);
+        assert!(rendered.contains("Market Leadership"));
+        assert!(rendered.contains("Tentative read"));
+        assert!(rendered.contains("5D / 20D Leadership Checks"));
+        assert!(rendered.contains("QQQ vs SPY"));
+        assert!(rendered.contains("Semis vs QQQ"));
+        assert!(rendered.contains("Falsifier / watch"));
+        assert!(rendered.contains("not investment advice"));
+        assert!(leadership_json(&healthy).contains("\"type\":\"leadership\""));
+
+        let crowded = compose_test_leadership(vec![
+            leadership_asset("QQQ", "QQQ", Some(0.8), Some(2.0)),
+            leadership_asset("SPY", "SPY", Some(0.3), Some(1.0)),
+            leadership_asset("^SOX", "Semis", Some(2.5), Some(7.0)),
+            leadership_asset("IWM", "IWM", Some(-1.0), Some(-2.0)),
+            leadership_asset("BTC-USD", "BTC", Some(-1.0), Some(-3.0)),
+            leadership_asset("^KS11", "KOSPI", Some(-0.2), Some(-1.0)),
+            leadership_asset("DX-Y.NYB", "DXY", Some(0.2), Some(0.4)),
+            leadership_asset("^TNX", "US 10Y", Some(0.1), Some(0.3)),
+        ]);
+        assert_eq!(crowded.label, "Crowded semis chase");
+
+        let mixed = compose_test_leadership(vec![
+            leadership_asset("QQQ", "QQQ", Some(0.2), Some(0.5)),
+            leadership_asset("SPY", "SPY", Some(0.2), Some(0.6)),
+            leadership_asset("^SOX", "Semis", Some(0.3), Some(0.4)),
+            leadership_asset("IWM", "IWM", Some(-0.4), Some(-0.8)),
+            leadership_asset("BTC-USD", "BTC", Some(0.1), Some(-0.5)),
+            leadership_asset("^KS11", "KOSPI", Some(0.0), Some(-0.3)),
+            leadership_asset("DX-Y.NYB", "DXY", Some(0.8), Some(1.0)),
+            leadership_asset("^TNX", "US 10Y", Some(1.0), Some(2.0)),
+        ]);
+        assert_eq!(mixed.label, "Mixed / fragile leadership");
+    }
+
+    fn leadership_asset(
+        symbol: &'static str,
+        label: &'static str,
+        five_day: Option<f64>,
+        twenty_day: Option<f64>,
+    ) -> LeadershipAsset {
+        LeadershipAsset {
+            symbol,
+            label,
+            unit: "",
+            value: Some(100.0),
+            five_day,
+            twenty_day,
+            note: None,
+        }
+    }
+
+    fn compose_test_leadership(assets: Vec<LeadershipAsset>) -> Leadership {
+        compose_leadership(assets, 0)
     }
 
     fn compose_test_regime(assets: Vec<Asset>) -> Regime {
