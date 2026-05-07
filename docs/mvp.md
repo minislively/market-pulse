@@ -130,6 +130,18 @@ Acceptance criteria:
 - Saves a `regime` journal event unless `--no-save` is passed.
 - Avoids trading advice.
 
+### `mp leadership` / `mp trend`
+
+Acceptance criteria:
+
+- Prints a compact market leadership card distinct from `mp now`, `mp week`, and `mp regime`.
+- Uses two default windows: 5D latest daily close vs prior daily close, and 20D/latest daily close vs first available close from Yahoo `range=1mo&interval=1d`; `regularMarketPrice` is fallback only.
+- Includes required checks: QQQ/SPY, Semis(or SOX)/QQQ, IWM/SPY, BTC, KOSPI, DXY, and US 10Y.
+- Renders one tentative read: `Healthy growth leadership`, `Crowded semis chase`, or `Mixed / fragile leadership`.
+- Includes evidence bullets and falsifier/watch bullets so the user can see what would change the read.
+- Saves a `leadership` journal event unless `--no-save` is passed.
+- Avoids trading advice, buy/sell guidance, position sizing, target prices, stop-losses, and one-day definitive regime claims.
+
 ### `mp think "..."`
 
 Acceptance criteria:

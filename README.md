@@ -20,6 +20,8 @@ mp fomo
 mp week
 mp calendar
 mp regime
+mp leadership --no-save
+mp trend --no-save
 mp earnings --no-save
 mp think "금리가 부담인데도 반도체가 버티는 걸 보면 성장 기대가 아직 남아있는 것 같다"
 mp review
@@ -263,6 +265,18 @@ Prints a broader 1-3 month market regime card:
 - next better regime question
 
 `mp regime` is intentionally separate from `mp now`: `now` is a close-to-close pulse, while `regime` is the larger backdrop traders compare against short-term moves. Regime market change uses Yahoo `range=3mo&interval=1wk` weekly closes: latest weekly close value versus the first available weekly close, with `regularMarketPrice` as fallback only. Date-based journal lookup now lives in `mp review --date YYYY-MM-DD`, the easier `mp review --days N`, and calendar aliases like `mp review --this-week`; broader search-style review remains a later phase.
+
+### `mp leadership` / `mp trend`
+
+Prints a compact market leadership card between `mp now` and `mp regime`:
+
+- tentative read: `Healthy growth leadership`, `Crowded semis chase`, or `Mixed / fragile leadership`
+- explicit 5D / 20D basis
+- relative checks for QQQ vs SPY, Semis vs QQQ, and IWM vs SPY
+- confirmation/pressure checks for BTC, KOSPI, DXY, and US 10Y
+- evidence bullets and falsifier/watch bullets
+
+The card uses Yahoo chart data through existing quote plumbing: 5D is latest daily close vs prior daily close, and 20D is latest daily close vs the first available close from `range=1mo&interval=1d`. The label is a tentative thinking scaffold, not a trading signal, and the boundary explicitly avoids investment advice, price targets, stop-losses, and portfolio instructions. It saves a `leadership` journal event unless `--no-save` is passed.
 
 ### `mp week`
 
